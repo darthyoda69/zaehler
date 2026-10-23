@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Etiketten-Zähler (MVP)</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; background:#111; color:#eee; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; }
+  #app { max-width: 820px; margin: 0 auto; padding: 8px 10px 40px; padding-top: max(8px, env(safe-area-inset-top)); }
+  #top { display:flex; align-items:center; gap:10px; }
+  #count { font-size: 92px; font-weight: 800; line-height: 1; min-width: 2.2ch; text-align:center; font-variant-numeric: tabular-nums; }
+  #count.warn { color:#ffb300; } #count.done { color:#2ecc71; } #count.over { color:#ff4136; }
+  #meta { flex:1; font-size: 15px; line-height:1.45; }
+  #meta b { font-size: 22px; }
+  .row { display:flex; gap:8px; margin: 8px 0; flex-wrap: wrap; align-items:center; }
+  button { font-size: 18px; padding: 12px 14px; border-radius: 12px; border: 0; background:#2b2b2b; color:#eee; }
+  button:active { background:#444; }
+  #startBtn { background:#1e6fd9; font-weight:700; flex:1; }
+  #resetBtn { background:#c0392b; font-weight:800; font-size: 26px; flex:2; padding: 18px; }
+  .small { font-size: 13px; color:#aaa; }
+  #view { width:100%; max-height: 52vh; object-fit: contain; background:#000; border-radius: 8px; display:block; touch-action: none; }
+  #graph { width:100%; height: 110px; background:#0b0b0b; border-radius: 8px; display:block; margin-top:6px; }
+  details { background:#1a1a1a; border-radius: 10px; padding: 6px 10px; margin-top: 8px; }
+  summary { font-size: 17px; padding: 6px 0; }
+  label { display:flex; align-items:center; gap:8px; margin: 8px 0; font-size: 15px; }
+  label span.lbl { width: 150px; flex: none; }
+  input[type=range] { flex:1; }
+  input[type=number] { font-size: 22px; width: 90px; padding: 6px; border-radius: 8px; border:1px solid #444; background:#222; color:#eee; }
+  select { font-size: 16px; padding: 6px; border-radius: 8px; background:#222; color:#eee; }
+  #status { min-height: 1.3em; }
+  video#video { position:fixed; left:0; top:0; width:2px; height:2px; opacity:0.01; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <div id="count">0</div>
+    <div id="meta">
+      Ziel: <b id="targetShow">37</b><br>
+      <span id="remain">noch 37</span><br>
+      <span class="small" id="fpsShow">– fps</span> · <span class="small" id="pitchShow">Raster: lernt…</span>
+    </div>
+  </div>
+  <div class="row">
+    <button id="startBtn">▶ Start (Kamera + Ton)</button>
+    <button id="minusBtn">−1</button>
+    <button id="plusBtn">+1</button>
+  </div>
+  <div class="row"><button id="resetBtn">↺ RESET (auf 0)</button></div>
+  <div id="status" class="small">Tippe „Start“. Kamera-Zugriff erlauben. Stummschalter am iPhone aus, sonst kein Ton.</div>
+  <canvas id="view" width="320" height="240"></canvas>
+  <canvas id="graph" width="800" height="220"></canvas>
+  <div class="small">Graph: weiß = Helligkeit entlang des Bands, orange = Schwelle, rote Punkte = erkannte Stege, grüne Striche = verfolgte Stege, rote Linie = Schnittlinie.</div>
+
+  <details open>
+    <summary>Einstellungen</summary>
+    <label><span class="lbl">Ziel-Stückzahl N</span><input id="target" type="number" min="1" max="9999" value="37" inputmode="numeric"></label>
+    <label><span class="lbl">Band läuft</span>
+      <select id="axis"><option value="v">vertikal (oben ↕ unten)</option><option value="h">horizontal (links ↔ rechts)</option></select></label>
+    <label><span class="lbl">Zugrichtung umkehren</span><input id="reverse" type="checkbox"><span class="small" id="dirHint"></span></label>
+    <label><span class="lbl">Zugrichtung automatisch</span><input id="autoDir" type="checkbox" checked><span class="small">erkennt die Richtung aus der Bandbewegung (stellt „umkehren“ selbst)</span></label>
+    <label><span class="lbl">Schnittlinie</span><input id="cut" type="range" min="10" max="90" value="50"><span id="cutV" class="small"></span></label>
+    <label><span class="lbl">Messstreifen Lage (quer)</span><input id="roiC" type="range" min="5" max="95" value="50"><span id="roiCV" class="small"></span></label>
+    <label><span class="lbl">Messstreifen Breite</span><input id="roiW" type="range" min="4" max="90" value="30"><span id="roiWV" class="small"></span></label>
+    <label><span class="lbl">Empfindlichkeit</span><input id="sens" type="range" min="1" max="10" value="6"><span id="sensV" class="small"></span></label>
+    <label><span class="lbl">Raster-Check (verpasste Stege ergänzen)</span><input id="raster" type="checkbox" checked></label>
+    <label><span class="lbl">Leiser Klick pro Etikett</span><input id="tick" type="checkbox" checked></label>
+    <label><span class="lbl">Kamera</span><select id="camSel"><option value="">Rückkamera (Standard)</option></select></label>
+    <div class="row">
+      <button id="torchBtn">🔦 Licht</button>
+      <button id="testSound">🔊 Ton-Test</button>
+      <button id="relearn">Raster neu lernen</button>
+    </div>
+    <div class="row">
+      <button id="recBtn">● Debug-Log aufnehmen</button>
+      <button id="dlBtn">⬇ Log speichern</button>
+    </div>
+    <div class="small" id="recInfo"></div>
+    <p class="small">Tipp: Handy 15–25 cm fest über dem Band, Band flach geführt, gleichmäßiges Licht – am besten Licht von <i>unten</i> durch das Band (2. Handy-Taschenlampe/LED-Panel). Den Messstreifen (blauer Rahmen) mitten auf das Band legen, Schnittlinie dorthin, wo geschnitten wird.<br><b>Ablauf:</b> 1) Start. 2) Zum Einlernen ~5 Etiketten langsam durchziehen, bis oben „Raster: … px“ steht. 3) Bandanfang an die Schnittlinie, RESET. 4) Ziehen – ab N−5 steigende Töne, bei N Doppelton, darüber tiefer Warnton. „ergänzt“ = Stege, die nur aus dem Raster geschätzt wurden (sollte 0 sein).</p>
+  </details>
+</div>
+<video id="video" playsinline muted autoplay></video>
+
+<script>
+// ===== CORE START =====
+// Pure detection/counting logic (no DOM) – also used by the offline test harness.
+var Core = (function () {
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+
+  // img: {data (RGBA), width, height}; opt: {axis:'v'|'h', roiCenter, roiWidth} (fractions 0..1)
+  function extractProfile(img, opt) {
+    var data = img.data, width = img.width, height = img.height;
+    var vertical = opt.axis === 'v';
+    var L = vertical ? height : width, A = vertical ? width : height;
+    var a0 = Math.round((opt.roiCenter - opt.roiWidth / 2) * A);
+    var a1 = Math.round((opt.roiCenter + opt.roiWidth / 2) * A);
+    a0 = clamp(a0, 0, A - 1); a1 = clamp(a1, a0 + 1, A);
+    var prof = new Float32Array(L), n = a1 - a0;
+    for (var i = 0; i < L; i++) {
+      var s = 0;
+      for (var a = a0; a < a1; a++) {
+        var p = vertical ? (i * width + a) * 4 : (a * width + i) * 4;
+        s += 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      }
+      prof[i] = s / n;
+    }
+    return prof;
+  }
+
+  function boxFilter(arr, r) {
+    var L = arr.length, out = new Float32Array(L), pre = new Float64Array(L + 1);
+    for (var i = 0; i < L; i++) pre[i + 1] = pre[i] + arr[i];
+    for (var j = 0; j < L; j++) {
+      var lo = Math.max(0, j - r), hi = Math.min(L, j + r + 1);
+      out[j] = (pre[hi] - pre[lo]) / (hi - lo);
+    }
+    return out;
+  }
+  function median(a) {
+    if (!a.length) return 0;
+    var b = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; });
+    var m = b.length >> 1;
+    return b.length % 2 ? b[m] : 0.5 * (b[m - 1] + b[m]);
+  }
+
+  // autoDir: learn the pull direction from the tape motion itself (a wrong "reverse" setting made every separator count -1).
+  // backHyst: a separator that passed the cut is only un-counted after sliding back this fraction of a label (short slips don't subtract).
+  function Counter(opt) {
+    this.opt = Object.assign({ sensitivity: 6, cut: 0.5, dir: 1, minContrast: 4, rasterCheck: true, hyst: 2, autoDir: true, backHyst: 0.5 }, opt || {});
+    this.onDirChange = null; // callback(dir) when autoDir flips the direction
+    this.fullReset();
+  }
+  Counter.prototype.fullReset = function () {
+    this.seps = []; this.P = 0; this.v = 0; this.prevD = null; this.pitch = 0;
+    this.pitchSamples = []; this.nextId = 1; this.bank = 0; this.manual = 0; this.virtualAdded = 0; this.virtualUnverified = 0; this.frame = 0;
+    this.count = 0; this.L = 0;
+    this.Pext = 0; this.dirSettled = false;
+  };
+  // Reset the count to 0 but keep tracking state (separators already past the cut line are not counted).
+  Counter.prototype.resetCount = function () {
+    this.bank = 0; this.manual = 0; this.virtualAdded = 0; this.virtualUnverified = 0;
+    for (var k = 0; k < this.seps.length; k++) this.seps[k].initAfter = this.seps[k].after;
+    this.count = 0;
+  };
+  Counter.prototype.relearnPitch = function () { this.pitch = 0; this.pitchSamples = []; };
+  Counter.prototype.adjust = function (delta) { this.manual += delta; this.count += delta; };
+
+  // Flipping the direction negates every contribution exactly (after/initAfter swap sides), so the count is preserved up to sign.
+  Counter.prototype.flipDir = function () {
+    this.opt.dir = -this.opt.dir;
+    this.bank = -this.bank;
+    for (var k = 0; k < this.seps.length; k++) { var S = this.seps[k]; S.after = !S.after; S.initAfter = !S.initAfter; }
+    this.Pext = this.opt.dir * this.P; this.dirSettled = true;
+    if (this.onDirChange) this.onDirChange(this.opt.dir);
+  };
+  // Progress along the configured direction is tracked as a high-water mark; decisions are made in label pitches only, so nothing
+  // flips before the raster is learned. The first net movement of 2 labels decides; afterwards only a pull-back of 3 labels flips
+  // it again (short pull-backs are normal handling). Pull-backs of 1-2 labels before the first forward motion must not flip.
+  Counter.prototype._autoDir = function () {
+    var x = this.opt.dir * this.P;
+    if (x > this.Pext) this.Pext = x;
+    if (!this.pitch) return;
+    var unit = this.pitch;
+    if (!this.dirSettled && this.Pext >= 2 * unit) this.dirSettled = true;
+    if (this.Pext - x > (this.dirSettled ? 3 : 2) * unit) this.flipDir();
+  };
+
+  Counter.prototype.process = function (prof) {
+    var o = this.opt, L = prof.length, i, k;
+    if (L !== this.L) { var keepBank = this.bank; this.fullReset(); this.bank = keepBank; this.L = L; }
+    this.frame++;
+    var sm = boxFilter(prof, 1);
+    var r = Math.max(4, Math.round(this.pitch ? this.pitch * 0.25 : L * 0.06));
+    var m = boxFilter(sm, r);
+    var d = new Float32Array(L);
+    for (i = 0; i < L; i++) d[i] = sm[i] - m[i];
+    var med = median(d), dev = new Float32Array(L);
+    for (i = 0; i < L; i++) dev[i] = Math.abs(d[i] - med);
+    var sigma = Math.max(0.5, 1.4826 * median(dev));
+    var kfac = 12 - o.sensitivity;            // sensitivity 1..10 -> k 11..2
+    var thr = Math.max(o.minContrast, kfac * sigma);
+
+    // --- peak detection (bright narrow peaks above local mean) ---
+    var pr = Math.max(3, Math.round(this.pitch ? this.pitch * 0.3 : L * 0.04));
+    var peaks = [];
+    for (i = 2; i < L - 2; i++) {
+      if (d[i] <= thr) continue;
+      var isMax = true;
+      for (var j = Math.max(0, i - pr); j <= Math.min(L - 1, i + pr); j++) {
+        if (d[j] > d[i] || (d[j] === d[i] && j < i)) { isMax = false; break; }
+      }
+      if (!isMax) continue;
+      var y0 = d[i - 1], y1 = d[i], y2 = d[i + 1], den = y0 - 2 * y1 + y2;
+      var off = den !== 0 ? clamp(0.5 * (y0 - y2) / den, -0.5, 0.5) : 0;
+      peaks.push(i + off);
+    }
+
+    // --- motion estimate: 1D normalized cross-correlation around predicted shift ---
+    var shift = 0, conf = 0;
+    if (this.prevD && this.prevD.length === L) {
+      var pd = this.prevD, R = Math.max(6, Math.round(L * 0.12)), c0 = Math.round(this.v);
+      var best = -2, bs = 0, cs = {};
+      for (var s = c0 - R; s <= c0 + R; s++) {
+        var i0 = Math.max(0, -s), i1 = Math.min(L, L - s);
+        if (i1 - i0 < L * 0.4) continue;
+        var sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = i1 - i0;
+        for (i = i0; i < i1; i++) { var x = pd[i], y = d[i + s]; sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y; }
+        var cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
+        var cc = (va > 1e-6 && vb > 1e-6) ? cov / Math.sqrt(va * vb) : 0;
+        cs[s] = cc;
+        if (cc > best) { best = cc; bs = s; }
+      }
+      conf = best;
+      if (best > 0.3) {
+        shift = bs;
+        if (cs[bs - 1] !== undefined && cs[bs + 1] !== undefined) {
+          var dn = cs[bs - 1] - 2 * best + cs[bs + 1];
+          if (dn < 0) shift = bs + clamp(0.5 * (cs[bs - 1] - cs[bs + 1]) / dn, -0.5, 0.5);
+        }
+      } else {
+        shift = this.v * 0.5; // low confidence: decay prediction
+      }
+    }
+    this.prevD = d;
+    this.P += shift;
+
+    // --- match peaks to tracked separators; refine motion with median residual ---
+    var tol = this.pitch ? 0.4 * this.pitch : L * 0.08;
+    var pairs = [];
+    for (k = 0; k < this.seps.length; k++) {
+      var sp = this.seps[k]; sp.u = sp.t + this.P; sp.matched = false;
+      for (var q = 0; q < peaks.length; q++) {
+        var dist = Math.abs(peaks[q] - sp.u);
+        if (dist < tol) pairs.push([dist, k, q]);
+      }
+    }
+    pairs.sort(function (a, b) { return a[0] - b[0]; });
+    var usedS = {}, usedP = {}, matches = [];
+    for (k = 0; k < pairs.length; k++) {
+      var pp = pairs[k];
+      if (usedS[pp[1]] || usedP[pp[2]]) continue;
+      usedS[pp[1]] = 1; usedP[pp[2]] = 1; matches.push([pp[1], pp[2]]);
+    }
+    var resid = 0;
+    if (matches.length) {
+      var rs = matches.map(function (mm) { return peaks[mm[1]] - this.seps[mm[0]].u; }, this);
+      resid = median(rs);
+      this.P += resid;
+    }
+    this.v = shift + resid;
+    if (o.autoDir) this._autoDir();
+    for (k = 0; k < matches.length; k++) {
+      var sm2 = this.seps[matches[k][0]], pk = peaks[matches[k][1]];
+      var u2 = sm2.t + this.P;
+      sm2.t += 0.5 * (pk - u2);
+      sm2.seen++; sm2.missed = 0; sm2.matched = true; sm2.realHits = (sm2.realHits || 0) + 1;
+      if (sm2.virtual && sm2.realHits >= 3) sm2.virtual = false; // confirmed by real detections
+    }
+    var cutU = o.cut * L, dir = o.dir;
+    var self = this;
+    function sideOf(u) { return dir * (u - cutU) > 0; }
+    // new separators from unmatched peaks
+    var minNew = this.pitch ? 0.6 * this.pitch : tol;
+    for (q = 0; q < peaks.length; q++) {
+      if (usedP[q]) continue;
+      var ok = true;
+      for (k = 0; k < this.seps.length; k++) if (Math.abs(this.seps[k].t + this.P - peaks[q]) < minNew) { ok = false; break; }
+      if (!ok) continue;
+      var aft = sideOf(peaks[q]);
+      this.seps.push({ id: this.nextId++, t: peaks[q] - this.P, seen: 1, missed: 0, confirmed: false, after: aft, initAfter: aft, virtual: false, matched: true, born: this.frame });
+    }
+
+    // --- update states, hysteresis crossing (asymmetric: quick in, slow out), pruning ---
+    var h = o.hyst, hb = Math.max(h, o.backHyst * (this.pitch || 0.16 * L)), keep = [];
+    for (k = 0; k < this.seps.length; k++) {
+      var S = this.seps[k], u = S.t + this.P; S.u = u;
+      var rel = dir * (u - cutU);
+      if (!S.after && rel > h) S.after = true;
+      else if (S.after && rel < -hb) S.after = false;
+      var inView = u > 3 && u < L - 3;
+      if (inView && !S.matched && !S.virtual) S.missed++;
+      if (!S.confirmed && S.seen >= 3) { S.confirmed = true; this._onConfirm(S); }
+      var contrib = (S.after ? 1 : 0) - (S.initAfter ? 1 : 0);
+      if (u < -0.1 * L || u > 1.1 * L) { if (S.confirmed) this.bank += contrib; if (S.virtual) this.virtualUnverified++; continue; } // left the view: bank
+      if (!S.confirmed && S.missed > 3) continue;                                               // unconfirmed noise
+      if (S.confirmed && !S.virtual && inView && S.missed > 30 && contrib === 0) continue;       // stale false positive
+      keep.push(S);
+    }
+    this.seps = keep;
+
+    // merge duplicates (drift)
+    var conf2 = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return a.t - b.t; });
+    var mergeD = this.pitch ? 0.45 * this.pitch : L * 0.04;
+    for (k = 1; k < conf2.length; k++) {
+      if (conf2[k].t - conf2[k - 1].t < mergeD) {
+        var drop = conf2[k].born > conf2[k - 1].born ? conf2[k] : conf2[k - 1];
+        drop.dead = true;
+      }
+    }
+    this.seps = this.seps.filter(function (s2) { return !s2.dead; });
+
+    // raster check: insert missing separators in ~2x, 3x pitch gaps
+    var inserted = 0;
+    if (o.rasterCheck && this.pitch) {
+      conf2 = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return a.t - b.t; });
+      for (k = 1; k < conf2.length; k++) {
+        var gap = conf2[k].t - conf2[k - 1].t, nn = Math.round(gap / this.pitch);
+        if (nn >= 2 && nn <= 4 && Math.abs(gap - nn * this.pitch) < 0.2 * nn * this.pitch) {
+          // "upstream" neighbour = the one that entered later (smaller dir*t)
+          var up = dir > 0 ? conf2[k - 1] : conf2[k];
+          // only fill gaps that are fully observed (both ends inside the view)
+          var ua = conf2[k - 1].t + this.P, ub = conf2[k].t + this.P;
+          if (ua < 0 || ub > L) continue;
+          for (var z = 1; z < nn; z++) {
+            var tt = conf2[k - 1].t + gap * z / nn, uu = tt + this.P;
+            var af = sideOf(uu);
+            this.seps.push({ id: this.nextId++, t: tt, seen: 99, missed: 0, confirmed: true, after: af,
+              initAfter: up.initAfter, virtual: true, matched: false, born: this.frame, u: uu });
+            inserted++;
+          }
+        }
+      }
+    }
+    // edge extrapolation: with a learned pitch, predict the next separator entering/leaving at the view edges
+    // (dead reckoning on the image-based motion; real detections re-sync it as soon as they match)
+    if (o.rasterCheck && this.pitch) {
+      var ca = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return (a.t + self.P) - (b.t + self.P); });
+      if (ca.length) {
+        var pt = this.pitch, edge = 0.15 * pt, cands = [];
+        var upS = dir > 0 ? ca[0] : ca[ca.length - 1], dnS = dir > 0 ? ca[ca.length - 1] : ca[0];
+        cands.push(upS.t + this.P - dir * pt, dnS.t + this.P + dir * pt);
+        for (var ci = 0; ci < cands.length; ci++) {
+          var nu2 = cands[ci];
+          if (nu2 < edge || nu2 > L - edge) continue;
+          var clash = false;
+          for (k = 0; k < this.seps.length; k++) if (this.seps[k].confirmed && Math.abs(this.seps[k].t + this.P - nu2) < 0.5 * pt) { clash = true; break; }
+          if (clash) continue;
+          var sd = sideOf(nu2);
+          this.seps.push({ id: this.nextId++, t: nu2 - this.P, seen: 99, missed: 0, confirmed: true, after: sd, initAfter: sd,
+            virtual: true, matched: false, born: this.frame, u: nu2 });
+          inserted++;
+        }
+      }
+    }
+    this.virtualAdded += inserted;
+
+    var cnt = this.bank + this.manual;
+    for (k = 0; k < this.seps.length; k++) {
+      var S2 = this.seps[k];
+      if (S2.confirmed) cnt += (S2.after ? 1 : 0) - (S2.initAfter ? 1 : 0);
+    }
+    this.count = cnt;
+    return { count: cnt, peaks: peaks, sm: sm, mean: m, thr: thr, shift: this.v, conf: conf, pitch: this.pitch, seps: this.seps, inserted: inserted };
+  };
+
+  Counter.prototype._onConfirm = function (S) {
+    // pitch learning: distance to the nearest other confirmed separator
+    var best = Infinity;
+    for (var k = 0; k < this.seps.length; k++) {
+      var o2 = this.seps[k];
+      if (o2 === S || !o2.confirmed || o2.virtual) continue;
+      var dd = Math.abs(o2.t - S.t);
+      if (dd < best) best = dd;
+    }
+    if (best < Infinity && best > this.L * 0.06) {
+      this.pitchSamples.push(best);
+      if (this.pitchSamples.length > 15) this.pitchSamples.shift();
+      if (this.pitchSamples.length >= 4) {
+        // use the lower half-ish median to avoid 2x gaps from misses
+        var sorted = this.pitchSamples.slice().sort(function (a, b) { return a - b; });
+        var med = median(sorted);
+        var good = sorted.filter(function (x) { return Math.abs(x - med) < 0.2 * med; });
+        if (good.length >= 3) this.pitch = median(good);
+      }
+    }
+  };
+
+  return { extractProfile: extractProfile, Counter: Counter, boxFilter: boxFilter, median: median };
+})();
+if (typeof module !== 'undefined') module.exports = Core;
+// ===== CORE END =====
+</script>
+
+<script>
+(function () {
+  if (typeof document === 'undefined') return;
+  var $ = function (id) { return document.getElementById(id); };
+  var video = $('video'), view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
+  var graph = $('graph'), gctx = graph.getContext('2d');
+  var stream = null, track = null, running = false, torchOn = false;
+  var counter = new Core.Counter();
+  var lastCount = 0, frames = 0, fpsT = performance.now(), fps = 0, lastRes = null;
+  var rec = null, wakeLock = null;
+
+  // ---------- settings ----------
+  var S = { target: 37, axis: 'v', reverse: false, autoDir: true, cut: 50, roiC: 50, roiW: 30, sens: 6, raster: true, tick: true, cam: '' };
+  try { Object.assign(S, JSON.parse(localStorage.getItem('labelCounterSettings') || '{}')); } catch (e) {}
+  function save() { try { localStorage.setItem('labelCounterSettings', JSON.stringify(S)); } catch (e) {} }
+  function applyUI() {
+    $('target').value = S.target; $('axis').value = S.axis; $('reverse').checked = S.reverse; $('autoDir').checked = S.autoDir;
+    $('cut').value = S.cut; $('roiC').value = S.roiC; $('roiW').value = S.roiW; $('sens').value = S.sens;
+    $('raster').checked = S.raster; $('tick').checked = S.tick;
+    $('cutV').textContent = S.cut + '%'; $('roiCV').textContent = S.roiC + '%'; $('roiWV').textContent = S.roiW + '%';
+    $('sensV').textContent = S.sens;
+    $('dirHint').textContent = S.axis === 'v' ? (S.reverse ? 'zählt bei Zug nach OBEN' : 'zählt bei Zug nach UNTEN')
+                                              : (S.reverse ? 'zählt bei Zug nach LINKS' : 'zählt bei Zug nach RECHTS');
+    $('targetShow').textContent = S.target;
+    counter.opt.sensitivity = +S.sens; counter.opt.cut = S.cut / 100; counter.opt.dir = S.reverse ? -1 : 1;
+    counter.opt.rasterCheck = S.raster; counter.opt.autoDir = S.autoDir;
+    updateCountUI();
+  }
+  // autoDir flipped the direction: mirror it into the "umkehren" setting so arrow and hint stay truthful (no reset, the count is kept)
+  counter.onDirChange = function (dir) {
+    S.reverse = dir < 0; save(); applyUI();
+    setStatus('Zugrichtung automatisch erkannt: ' + $('dirHint').textContent + '.');
+    if (rec) rec.push([Date.now(), 'autodir', counter.count, (counter.P || 0).toFixed(1), dir, fps.toFixed(1)]);
+  };
+  function bind(id, key, conv, full) {
+    $(id).addEventListener('input', function (e) {
+      var el = e.target; S[key] = el.type === 'checkbox' ? el.checked : conv(el.value);
+      save(); applyUI(); if (full) { counter.fullReset(); lastCount = 0; }
+    });
+  }
+  bind('target', 'target', function (v) { return Math.max(1, parseInt(v, 10) || 1); });
+  bind('axis', 'axis', String, true); bind('reverse', 'reverse', Boolean, true); bind('autoDir', 'autoDir', Boolean);
+  bind('cut', 'cut', Number, true); bind('roiC', 'roiC', Number, true); bind('roiW', 'roiW', Number, true);
+  bind('sens', 'sens', Number); bind('raster', 'raster', Boolean); bind('tick', 'tick', Boolean);
+
+  // ---------- audio ----------
+  var ac = null;
+  function ensureAudio() {
+    if (!ac) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      ac = new AC();
+      var b = ac.createBuffer(1, 1, 22050), src = ac.createBufferSource(); // iOS unlock
+      src.buffer = b; src.connect(ac.destination); src.start(0);
+    }
+    if (ac.state === 'suspended') ac.resume();
+  }
+  function tone(f, dur, delay, type, vol) {
+    if (!ac) return;
+    var t = ac.currentTime + (delay || 0), o = ac.createOscillator(), g = ac.createGain();
+    o.type = type || 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.5, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function vib(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+  function feedback(c) {
+    var N = S.target;
+    if (c > N) { tone(160, 0.6, 0, 'square', 0.35); tone(140, 0.6, 0.65, 'square', 0.35); vib([400, 100, 400]); }
+    else if (c === N) { tone(880, 0.15, 0, 'sine', 0.6); tone(1320, 0.35, 0.18, 'sine', 0.6); vib([100, 60, 250]); }
+    else if (c >= N - 5) { tone(500 * Math.pow(1.19, c - (N - 5)), 0.12, 0, 'triangle', 0.55); vib(40); }
+    else if (S.tick) tone(1500, 0.025, 0, 'sine', 0.12);
+  }
+
+  // ---------- UI helpers ----------
+  function setStatus(t) { $('status').textContent = t; }
+  function updateCountUI() {
+    var c = counter.count, N = S.target, el = $('count');
+    el.textContent = c;
+    el.className = c > N ? 'over' : c === N ? 'done' : c >= N - 5 ? 'warn' : '';
+    $('remain').textContent = c > N ? ('⚠ ' + (c - N) + ' zu viel!') : c === N ? '✂ JETZT SCHNEIDEN' : ('noch ' + (N - c));
+  }
+  function onCount(c) {
+    if (c === lastCount) return;
+    if (c > lastCount) { for (var x = lastCount + 1; x <= c; x++) if (x === c) feedback(x); }
+    else tone(330, 0.08, 0, 'sine', 0.3);
+    if (rec) rec.push([Date.now(), 'count', c, (counter.P || 0).toFixed(1), (counter.v || 0).toFixed(2), fps.toFixed(1)]);
+    lastCount = c; updateCountUI();
+  }
+
+  $('resetBtn').addEventListener('click', function () {
+    ensureAudio(); counter.resetCount(); lastCount = 0; updateCountUI(); tone(700, 0.06, 0, 'sine', 0.3);
+    if (rec) rec.push([Date.now(), 'reset', 0, '', '', '']);
+  });
+  $('plusBtn').addEventListener('click', function () { counter.adjust(1); onCount(counter.count); if (rec) rec.push([Date.now(), 'manual+1', counter.count, '', '', '']); });
+  $('minusBtn').addEventListener('click', function () { counter.adjust(-1); onCount(counter.count); if (rec) rec.push([Date.now(), 'manual-1', counter.count, '', '', '']); });
+  $('testSound').addEventListener('click', function () {
+    ensureAudio(); var N = S.target, d = 0;
+    [N - 5, N - 4, N - 3, N - 2, N - 1].forEach(function (c, i) { setTimeout(function () { feedback(c); }, i * 350); });
+    setTimeout(function () { feedback(N); }, 5 * 350 + 200);
+    setTimeout(function () { feedback(N + 1); }, 5 * 350 + 1200);
+  });
+  $('relearn').addEventListener('click', function () { counter.relearnPitch(); });
+  $('recBtn').addEventListener('click', function () {
+    if (rec) { $('recBtn').textContent = '● Debug-Log aufnehmen'; $('recInfo').textContent = 'Log gestoppt: ' + rec.length + ' Einträge'; window._lastLog = rec; rec = null; }
+    else { rec = []; window._lastLog = rec; $('recBtn').textContent = '■ Log stoppen'; $('recInfo').textContent = 'Log läuft…'; }
+  });
+  $('dlBtn').addEventListener('click', function () {
+    var L = rec || window._lastLog || [];
+    var csv = 'time_ms,event,count,tape_pos,shift_per_frame,fps\n' + L.map(function (r) { return r.join(','); }).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv' }), a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'etiketten-log-' + Date.now() + '.csv';
+    document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 1000);
+  });
+
+  // ---------- camera ----------
+  async function listCams() {
+    try {
+      var devs = await navigator.mediaDevices.enumerateDevices(), sel = $('camSel');
+      sel.innerHTML = '<option value="">Rückkamera (Standard)</option>';
+      devs.filter(function (d) { return d.kind === 'videoinput'; }).forEach(function (d, i) {
+        var op = document.createElement('option'); op.value = d.deviceId; op.textContent = d.label || ('Kamera ' + (i + 1));
+        sel.appendChild(op);
+      });
+      sel.value = S.cam || '';
+    } catch (e) {}
+  }
+  $('camSel').addEventListener('change', function (e) { S.cam = e.target.value; save(); if (running) startCam(); });
+
+  async function startCam() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('Kamera nicht verfügbar. Seite muss über HTTPS (oder localhost) geöffnet sein.'); return;
+    }
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    var v = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 15 } };
+    if (S.cam) v.deviceId = { exact: S.cam }; else v.facingMode = { ideal: 'environment' };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+    } catch (e) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: S.cam ? { deviceId: S.cam } : { facingMode: 'environment' }, audio: false }); }
+      catch (e2) { setStatus('Kamera-Fehler: ' + e2.name + ' – ' + e2.message); return; }
+    }
+    track = stream.getVideoTracks()[0];
+    video.srcObject = stream;
+    try { await video.play(); } catch (e) {}
+    var caps = track.getCapabilities ? track.getCapabilities() : {};
+    var st = track.getSettings ? track.getSettings() : {};
+    $('torchBtn').disabled = !caps.torch;
+    $('torchBtn').textContent = caps.torch ? '🔦 Licht' : '🔦 Licht (nicht unterstützt)';
+    setStatus('Kamera läuft: ' + (st.width || '?') + '×' + (st.height || '?') + ' @ ' + (st.frameRate ? Math.round(st.frameRate) : '?') + ' fps angefragt. Band unter den blauen Rahmen legen, ~5 Etiketten langsam zum Einlernen durchziehen, dann RESET.');
+    running = true; counter.fullReset(); lastCount = 0; updateCountUI();
+    listCams();
+    loop();
+  }
+  $('torchBtn').addEventListener('click', async function () {
+    if (!track) return;
+    try { torchOn = !torchOn; await track.applyConstraints({ advanced: [{ torch: torchOn }] }); }
+    catch (e) { torchOn = false; setStatus('Licht lässt sich in diesem Browser nicht schalten (iOS Safari: meist nicht unterstützt).'); }
+  });
+  $('startBtn').addEventListener('click', async function () {
+    ensureAudio();
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+    await startCam();
+    $('startBtn').textContent = '⟳ Kamera neu starten';
+  });
+  document.addEventListener('visibilitychange', async function () {
+    if (document.visibilityState === 'visible' && running) { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+  });
+
+  // ---------- frame loop ----------
+  var loopScheduled = false;
+  function schedule() {
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick);
+    else requestAnimationFrame(tick);
+  }
+  function loop() { if (!loopScheduled) { loopScheduled = true; schedule(); } }
+  var lastVT = -1;
+  function tick(now, meta) {
+    if (!running) { loopScheduled = false; return; }
+    schedule();
+    if (video.readyState < 2 || !video.videoWidth) return;
+    if (!meta) { if (video.currentTime === lastVT) return; lastVT = video.currentTime; } // rAF fallback: skip duplicate frames
+    var vw = video.videoWidth, vh = video.videoHeight, sc = 400 / Math.max(vw, vh);
+    var w = Math.round(vw * sc), h = Math.round(vh * sc);
+    if (view.width !== w || view.height !== h) { view.width = w; view.height = h; }
+    vctx.drawImage(video, 0, 0, w, h);
+    var img = vctx.getImageData(0, 0, w, h);
+    var prof = Core.extractProfile(img, { axis: S.axis, roiCenter: S.roiC / 100, roiWidth: S.roiW / 100 });
+    var res = counter.process(prof);
+    lastRes = res;
+    onCount(res.count);
+    drawOverlay(w, h, res); drawGraph(res, prof.length);
+    frames++;
+    var t = performance.now();
+    if (t - fpsT > 1000) {
+      fps = frames * 1000 / (t - fpsT); frames = 0; fpsT = t;
+      $('fpsShow').textContent = fps.toFixed(0) + ' fps' + (fps < 20 ? ' (langsam ziehen!)' : '');
+      $('pitchShow').textContent = res.pitch ? ('Raster: ' + res.pitch.toFixed(0) + ' px' + (counter.virtualUnverified ? ', ergänzt: ' + counter.virtualUnverified : '')) : 'Raster: lernt…';
+    }
+  }
+
+  function drawOverlay(w, h, res) {
+    var vert = S.axis === 'v', L = vert ? h : w, A = vert ? w : h;
+    var a0 = (S.roiC - S.roiW / 2) / 100 * A, a1 = (S.roiC + S.roiW / 2) / 100 * A, cu = S.cut / 100 * L;
+    vctx.lineWidth = 2;
+    vctx.strokeStyle = '#3fa9ff';
+    if (vert) vctx.strokeRect(a0, 0, a1 - a0, h); else vctx.strokeRect(0, a0, w, a1 - a0);
+    res.seps.forEach(function (s) {
+      if (!s.confirmed) return;
+      vctx.strokeStyle = s.virtual ? '#ff00ff' : '#2ecc71';
+      vctx.beginPath();
+      if (vert) { vctx.moveTo(a0, s.u); vctx.lineTo(a1, s.u); } else { vctx.moveTo(s.u, a0); vctx.lineTo(s.u, a1); }
+      vctx.stroke();
+    });
+    vctx.strokeStyle = '#ff3b30'; vctx.lineWidth = 3;
+    vctx.beginPath();
+    if (vert) { vctx.moveTo(0, cu); vctx.lineTo(w, cu); } else { vctx.moveTo(cu, 0); vctx.lineTo(cu, h); }
+    vctx.stroke();
+    // direction arrow
+    var d = S.reverse ? -1 : 1; vctx.fillStyle = '#ff3b30'; vctx.font = 'bold 18px sans-serif';
+    var arrow = vert ? (d > 0 ? '▼ Zug' : '▲ Zug') : (d > 0 ? 'Zug ▶' : '◀ Zug');
+    if (vert) vctx.fillText(arrow, 6, Math.max(18, cu - 6)); else vctx.fillText(arrow, Math.min(w - 70, cu + 6), 20);
+  }
+
+  function drawGraph(res, L) {
+    var W = graph.width, H = graph.height, sm = res.sm, m = res.mean;
+    gctx.fillStyle = '#0b0b0b'; gctx.fillRect(0, 0, W, H);
+    var lo = 255, hi = 0, i;
+    for (i = 0; i < L; i++) { if (sm[i] < lo) lo = sm[i]; if (sm[i] > hi) hi = sm[i]; }
+    if (hi - lo < 10) hi = lo + 10;
+    var X = function (i) { return i / (L - 1) * W; }, Y = function (v) { return H - 6 - (v - lo) / (hi - lo) * (H - 12); };
+    function line(arr, col, add) {
+      gctx.strokeStyle = col; gctx.beginPath();
+      for (var j = 0; j < L; j++) { var yy = Y(arr[j] + (add || 0)); if (j) gctx.lineTo(X(j), yy); else gctx.moveTo(X(j), yy); }
+      gctx.stroke();
+    }
+    gctx.lineWidth = 1; line(m, '#555'); line(m, '#ff9500', res.thr);
+    gctx.lineWidth = 2; line(sm, '#fff');
+    res.seps.forEach(function (s) {
+      if (!s.confirmed) return;
+      gctx.strokeStyle = s.virtual ? '#ff00ff' : '#2ecc71'; gctx.beginPath(); gctx.moveTo(X(s.u), 0); gctx.lineTo(X(s.u), 14); gctx.stroke();
+    });
+    gctx.fillStyle = '#ff3b30';
+    res.peaks.forEach(function (p) { gctx.beginPath(); gctx.arc(X(p), Y(sm[Math.round(p)]), 5, 0, 7); gctx.fill(); });
+    gctx.strokeStyle = '#ff3b30'; gctx.lineWidth = 2; var cx = X(S.cut / 100 * (L - 1));
+    gctx.beginPath(); gctx.moveTo(cx, 0); gctx.lineTo(cx, H); gctx.stroke();
+    gctx.fillStyle = '#aaa'; gctx.font = '20px sans-serif';
+    gctx.fillText('Bewegung ' + res.shift.toFixed(1) + ' px/Frame · Korr ' + res.conf.toFixed(2), 8, 22);
+  }
+
+  applyUI();
+  if (!window.isSecureContext) setStatus('⚠ Diese Seite ist nicht über HTTPS geöffnet – die Kamera wird nicht funktionieren.');
+})();
+</script>
+</body>
+</html>
