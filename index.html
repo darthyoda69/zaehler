@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Etiketten-Zähler (MVP)</title>
+<title>Etiketten-Zähler v2</title>
 <link rel="icon" href="data:,">
 <style>
   :root { color-scheme: dark; }
@@ -21,7 +21,11 @@
   button:active { background:#444; }
   #startBtn { background:#1e6fd9; font-weight:700; flex:1; }
   #resetBtn { background:#c0392b; font-weight:800; font-size: 26px; flex:2; padding: 18px; }
+  #flipBtn { flex:1; }
   .small { font-size: 13px; color:#aaa; }
+  #diag { font-size: 16px; font-weight: 600; padding: 6px 8px; border-radius: 8px; background:#1d2a1d; color:#9be79b; min-height: 1.4em; margin-top: 6px; }
+  #diag.warn { background:#2d2614; color:#ffcf66; } #diag.bad { background:#2e1616; color:#ff8a80; }
+  #ver { position: fixed; right: 6px; bottom: 4px; font-size: 11px; color:#777; }
   #view { width:100%; max-height: 52vh; object-fit: contain; background:#000; border-radius: 8px; display:block; touch-action: none; }
   #graph { width:100%; height: 110px; background:#0b0b0b; border-radius: 8px; display:block; margin-top:6px; }
   details { background:#1a1a1a; border-radius: 10px; padding: 6px 10px; margin-top: 8px; }
@@ -42,7 +46,8 @@
     <div id="meta">
       Ziel: <b id="targetShow">37</b><br>
       <span id="remain">noch 37</span><br>
-      <span class="small" id="fpsShow">– fps</span> · <span class="small" id="pitchShow">Raster: lernt…</span>
+      <span class="small" id="fpsShow">– fps</span> · <span class="small" id="pitchShow">Raster: lernt…</span><br>
+      <span class="small" id="dirShow">Richtung: wird erkannt</span> · <span class="small" id="modeShow"></span>
     </div>
   </div>
   <div class="row">
@@ -50,336 +55,480 @@
     <button id="minusBtn">−1</button>
     <button id="plusBtn">+1</button>
   </div>
-  <div class="row"><button id="resetBtn">↺ RESET (auf 0)</button></div>
-  <div id="status" class="small">Tippe „Start“. Kamera-Zugriff erlauben. Stummschalter am iPhone aus, sonst kein Ton.</div>
+  <div class="row"><button id="resetBtn">↺ RESET (auf 0)</button><button id="flipBtn" title="Zugrichtung tauschen">⇅ Richtung tauschen</button></div>
+  <div id="diag">Tippe „Start“.</div>
+  <div id="status" class="small">Kamera-Zugriff erlauben. Stummschalter am iPhone aus, sonst kein Ton.</div>
   <canvas id="view" width="320" height="240"></canvas>
   <canvas id="graph" width="800" height="220"></canvas>
-  <div class="small">Graph: weiß = Helligkeit entlang des Bands, orange = Schwelle, rote Punkte = erkannte Stege, grüne Striche = verfolgte Stege, rote Linie = Schnittlinie.</div>
+  <div class="small">Bild: gelb = heller Messbereich (abzgl. Randabstand), blau = Band-Messstreifen, grün = erkannte Etikettengrenzen, rot = Schnittlinie + Zugrichtung. Graph: normiertes Profil entlang des Bands.</div>
 
   <details open>
     <summary>Einstellungen</summary>
     <label><span class="lbl">Ziel-Stückzahl N</span><input id="target" type="number" min="1" max="9999" value="37" inputmode="numeric"></label>
+    <label><span class="lbl">Modus</span>
+      <select id="mode"><option value="auto">Auto</option><option value="back">Durchlicht (Trennsteg)</option><option value="motif">Motiv (Auflicht)</option></select></label>
     <label><span class="lbl">Band läuft</span>
       <select id="axis"><option value="v">vertikal (oben ↕ unten)</option><option value="h">horizontal (links ↔ rechts)</option></select></label>
-    <label><span class="lbl">Zugrichtung umkehren</span><input id="reverse" type="checkbox"><span class="small" id="dirHint"></span></label>
-    <label><span class="lbl">Zugrichtung automatisch</span><input id="autoDir" type="checkbox" checked><span class="small">erkennt die Richtung aus der Bandbewegung (stellt „umkehren“ selbst)</span></label>
+    <label><span class="lbl">Zugrichtung</span>
+      <select id="dirMode"><option value="auto">Auto (wird gelernt)</option><option value="fwd">fest ▼ / ▶</option><option value="rev">fest ▲ / ◀</option></select></label>
+    <label><span class="lbl">Band automatisch finden</span><input id="autoTape" type="checkbox" checked><span class="small">(sonst manueller Messstreifen)</span></label>
+    <label><span class="lbl">Randabstand</span><input id="margin" type="range" min="0" max="25" value="8"><span id="marginV" class="small"></span></label>
     <label><span class="lbl">Schnittlinie</span><input id="cut" type="range" min="10" max="90" value="50"><span id="cutV" class="small"></span></label>
-    <label><span class="lbl">Messstreifen Lage (quer)</span><input id="roiC" type="range" min="5" max="95" value="50"><span id="roiCV" class="small"></span></label>
-    <label><span class="lbl">Messstreifen Breite</span><input id="roiW" type="range" min="4" max="90" value="30"><span id="roiWV" class="small"></span></label>
-    <label><span class="lbl">Empfindlichkeit</span><input id="sens" type="range" min="1" max="10" value="6"><span id="sensV" class="small"></span></label>
-    <label><span class="lbl">Raster-Check (verpasste Stege ergänzen)</span><input id="raster" type="checkbox" checked></label>
+    <label><span class="lbl">Messstreifen Lage (quer, manuell)</span><input id="roiC" type="range" min="5" max="95" value="50"><span id="roiCV" class="small"></span></label>
+    <label><span class="lbl">Messstreifen Breite (manuell)</span><input id="roiW" type="range" min="4" max="90" value="30"><span id="roiWV" class="small"></span></label>
+    <label><span class="lbl">Empfindlichkeit (Trennsteg)</span><input id="sens" type="range" min="1" max="10" value="6"><span id="sensV" class="small"></span></label>
+    <label><span class="lbl">Raster manuell (px, 0 = auto)</span><input id="manPitch" type="number" min="0" max="400" value="0" inputmode="numeric"></label>
+    <label><span class="lbl">Raster-Fang (Phase einrasten)</span><input id="raster" type="checkbox" checked></label>
     <label><span class="lbl">Leiser Klick pro Etikett</span><input id="tick" type="checkbox" checked></label>
     <label><span class="lbl">Kamera</span><select id="camSel"><option value="">Rückkamera (Standard)</option></select></label>
     <div class="row">
       <button id="torchBtn">🔦 Licht</button>
       <button id="testSound">🔊 Ton-Test</button>
-      <button id="relearn">Raster neu lernen</button>
+      <button id="relearn">Neu anlernen</button>
     </div>
     <div class="row">
       <button id="recBtn">● Debug-Log aufnehmen</button>
       <button id="dlBtn">⬇ Log speichern</button>
     </div>
     <div class="small" id="recInfo"></div>
-    <p class="small">Tipp: Handy 15–25 cm fest über dem Band, Band flach geführt, gleichmäßiges Licht – am besten Licht von <i>unten</i> durch das Band (2. Handy-Taschenlampe/LED-Panel). Den Messstreifen (blauer Rahmen) mitten auf das Band legen, Schnittlinie dorthin, wo geschnitten wird.<br><b>Ablauf:</b> 1) Start. 2) Zum Einlernen ~5 Etiketten langsam durchziehen, bis oben „Raster: … px“ steht. 3) Bandanfang an die Schnittlinie, RESET. 4) Ziehen – ab N−5 steigende Töne, bei N Doppelton, darüber tiefer Warnton. „ergänzt“ = Stege, die nur aus dem Raster geschätzt wurden (sollte 0 sein).</p>
+    <p class="small">Tipp: Handy 15–25 cm fest über dem Band, Band flach über eine helle Fläche (weißes Papier oder Licht von unten). Der gelbe Rahmen zeigt den genutzten hellen Bereich – Ränder, Finger und Schatten außerhalb werden ignoriert (Randabstand vergrößern, wenn etwas stört).<br>
+    <b>Ablauf:</b> 1) Start. 2) ~3–5 Etiketten langsam in Zugrichtung durchziehen, bis „OK – zählt“ und „Raster: … px“ erscheinen (Richtung wird dabei gelernt). 3) Bandanfang an die Schnittlinie, RESET. 4) Ziehen – ab N−5 steigende Töne, bei N Doppelton, darüber tiefer Warnton. Kurzes Zurückrutschen wird ignoriert. Nicht schneller als ca. ⅓ Etikett pro Kamerabild ziehen.</p>
   </details>
 </div>
+<div id="ver"></div>
 <video id="video" playsinline muted autoplay></video>
 
 <script>
 // ===== CORE START =====
-// Pure detection/counting logic (no DOM) – also used by the offline test harness.
+// Pure detection/counting logic (no DOM) – also used by the offline test harness (node).
 var Core = (function () {
+  var VERSION = 'v2.0';
   function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
-
-  // img: {data (RGBA), width, height}; opt: {axis:'v'|'h', roiCenter, roiWidth} (fractions 0..1)
-  function extractProfile(img, opt) {
-    var data = img.data, width = img.width, height = img.height;
-    var vertical = opt.axis === 'v';
-    var L = vertical ? height : width, A = vertical ? width : height;
-    var a0 = Math.round((opt.roiCenter - opt.roiWidth / 2) * A);
-    var a1 = Math.round((opt.roiCenter + opt.roiWidth / 2) * A);
-    a0 = clamp(a0, 0, A - 1); a1 = clamp(a1, a0 + 1, A);
-    var prof = new Float32Array(L), n = a1 - a0;
-    for (var i = 0; i < L; i++) {
-      var s = 0;
-      for (var a = a0; a < a1; a++) {
-        var p = vertical ? (i * width + a) * 4 : (a * width + i) * 4;
-        s += 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
-      }
-      prof[i] = s / n;
-    }
-    return prof;
-  }
-
   function boxFilter(arr, r) {
     var L = arr.length, out = new Float32Array(L), pre = new Float64Array(L + 1);
     for (var i = 0; i < L; i++) pre[i + 1] = pre[i] + arr[i];
-    for (var j = 0; j < L; j++) {
-      var lo = Math.max(0, j - r), hi = Math.min(L, j + r + 1);
-      out[j] = (pre[hi] - pre[lo]) / (hi - lo);
-    }
+    for (var j = 0; j < L; j++) { var lo = Math.max(0, j - r), hi = Math.min(L, j + r + 1); out[j] = (pre[hi] - pre[lo]) / (hi - lo); }
     return out;
   }
   function median(a) {
     if (!a.length) return 0;
-    var b = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; });
-    var m = b.length >> 1;
+    var b = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; }), m = b.length >> 1;
     return b.length % 2 ? b[m] : 0.5 * (b[m - 1] + b[m]);
   }
+  function mod(a, n) { return ((a % n) + n) % n; }
+  function wrapHalf(x) { return x - Math.round(x); } // label units -> (-0.5, 0.5]
 
-  // autoDir: learn the pull direction from the tape motion itself (a wrong "reverse" setting made every separator count -1).
-  // backHyst: a separator that passed the cut is only un-counted after sliding back this fraction of a label (short slips don't subtract).
+  // ---------------------------------------------------------------------------
+  // Geometry: bright usable region (white / backlit area behind the tape) + tape position.
+  // Works in the "axis frame": l = along the tape (0..Lfull), a = across.
+  function Geometry() { this.reset(); }
+  Geometry.prototype.reset = function () { this.g = null; this.n = 0; };
+  // returns raw detection {ok, reason, l0,l1,a0,a1, tc, ts, tw, tapeOk}
+  Geometry.prototype.detect = function (img, axis) {
+    var W = img.width, H = img.height, D = img.data, vert = axis !== 'h';
+    var Lf = vert ? H : W, Af = vert ? W : H, st = 2;
+    var nl = Math.floor(Lf / st), na = Math.floor(Af / st);
+    var lum = new Float32Array(nl * na), sat = new Float32Array(nl * na), R = new Float32Array(nl * na), G = new Float32Array(nl * na), B = new Float32Array(nl * na);
+    var hist = new Uint32Array(256), l, a;
+    for (l = 0; l < nl; l++) for (a = 0; a < na; a++) {
+      var x = vert ? a * st : l * st, y = vert ? l * st : a * st, p = (y * W + x) * 4;
+      var r = D[p], g = D[p + 1], b = D[p + 2], q = l * na + a;
+      var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      R[q] = r; G[q] = g; B[q] = b; lum[q] = 0.299 * r + 0.587 * g + 0.114 * b; sat[q] = mx - mn;
+      hist[Math.min(255, lum[q] | 0)]++;
+    }
+    var tot = nl * na, acc = 0, p95 = 255;
+    for (var h = 255; h >= 0; h--) { acc += hist[h]; if (acc >= tot * 0.05) { p95 = h; break; } }
+    var thr = Math.max(60, 0.72 * p95), bright = new Uint8Array(nl * na);
+    for (q = 0; q < tot; q++) bright[q] = (lum[q] > thr && sat[q] < 70) ? 1 : 0;
+    // rows (along axis): fraction bright
+    var fr = new Float32Array(nl);
+    for (l = 0; l < nl; l++) { var s = 0; for (a = 0; a < na; a++) s += bright[l * na + a]; fr[l] = s / na; }
+    var best = [0, -1], cur = -1, gap = 0, lastGood = -1;
+    for (l = 0; l < nl; l++) {
+      if (fr[l] >= 0.35) { if (cur < 0) cur = l; lastGood = l; gap = 0; }
+      else if (cur >= 0) { gap++; if (gap > 4) { if (lastGood - cur > best[1] - best[0]) best = [cur, lastGood]; cur = -1; } }
+    }
+    if (cur >= 0 && lastGood - cur > best[1] - best[0]) best = [cur, lastGood];
+    var res = { ok: false, reason: 'noRegion', Lf: Lf, Af: Af };
+    if (best[1] - best[0] < nl * 0.15) return res;
+    var l0 = best[0], l1 = best[1];
+    // columns within those rows
+    var fc = new Float32Array(na), a0 = -1, a1 = -1;
+    for (a = 0; a < na; a++) { var s2 = 0; for (l = l0; l <= l1; l++) s2 += bright[l * na + a]; fc[a] = s2 / (l1 - l0 + 1); if (fc[a] >= 0.35) { if (a0 < 0) a0 = a; a1 = a; } }
+    if (a1 - a0 < na * 0.15) return res;
+    // background colour
+    var bR = 0, bG = 0, bB = 0, bn = 0;
+    for (l = l0; l <= l1; l += 2) for (a = a0; a <= a1; a += 2) { q = l * na + a; if (bright[q]) { bR += R[q]; bG += G[q]; bB += B[q]; bn++; } }
+    bR /= bn; bG /= bn; bB /= bn;
+    res = { ok: true, reason: '', Lf: Lf, Af: Af, l0: l0 * st, l1: (l1 + 1) * st, a0: a0 * st, a1: (a1 + 1) * st, tapeOk: false, bg: [bR, bG, bB] };
+    // tape: column score = along-tape texture energy (high-pass std of the colour distance) – flat background,
+    // board edges, shadows score low; the woven pattern scores high. Done per half to estimate tilt.
+    var lm = (l0 + l1) >> 1, halves = [[l0, lm], [lm, l1]], cs = [], ws = [], strength = [];
+    var aIn0 = a0 + Math.round(0.02 * na), aIn1 = a1 - Math.round(0.02 * na);
+    for (var hh = 0; hh < 2; hh++) {
+      var sc = new Float32Array(aIn1 - aIn0 + 1), ln = halves[hh][1] - halves[hh][0] + 1, col = new Float32Array(ln);
+      for (a = aIn0; a <= aIn1; a++) {
+        for (l = halves[hh][0]; l <= halves[hh][1]; l++) { q = l * na + a; col[l - halves[hh][0]] = Math.abs(R[q] - bR) + Math.abs(G[q] - bG) + 2 * Math.abs(B[q] - bB); }
+        var cm = boxFilter(col, 6), ss = 0;
+        for (l = 0; l < ln; l++) { var dv = col[l] - cm[l]; ss += dv * dv; }
+        sc[a - aIn0] = Math.sqrt(ss / ln);
+      }
+      var scs = boxFilter(sc, 1), base = median(scs), mi = 0;
+      for (a = 0; a < scs.length; a++) if (scs[a] > scs[mi]) mi = a;
+      var th = base + 0.35 * (scs[mi] - base), e0 = mi, e1 = mi;
+      while (e0 > 0 && scs[e0 - 1] > th) e0--;
+      while (e1 < scs.length - 1 && scs[e1 + 1] > th) e1++;
+      cs.push((aIn0 + (e0 + e1 + 1) / 2) * st); ws.push((e1 - e0 + 1) * st); strength.push(scs[mi] - base);
+    }
+    var lc0 = ((l0 + lm) / 2) * st, lc1 = ((lm + l1) / 2) * st;
+    res.ts = (cs[1] - cs[0]) / Math.max(1, lc1 - lc0); // slope da/dl
+    res.tc = cs[0] - res.ts * lc0;                     // centre at l = 0
+    res.tw = 0.5 * (ws[0] + ws[1]);
+    res.tapeOk = Math.min(strength[0], strength[1]) > 4 && Math.abs(cs[1] - cs[0]) < 0.5 * res.tw + 0.25 * (lc1 - lc0) && res.tw < 0.85 * (a1 - a0 + 1) * st && Math.abs(res.ts) < 0.35;
+    return res;
+  };
+  // smoothed update; returns current geometry
+  Geometry.prototype.update = function (img, axis) {
+    var d = this.detect(img, axis), g = this.g, k = this.n < 3 ? 1 : 0.3;
+    this.last = d;
+    if (!d.ok) { this.miss = (this.miss || 0) + 1; if (this.miss > 8) this.g = null; return this.g; }
+    this.miss = 0;
+    if (!g || g.Lf !== d.Lf) { this.g = g = JSON.parse(JSON.stringify(d)); this.n = 1; return g; }
+    ['l0', 'l1', 'a0', 'a1'].forEach(function (key) { g[key] += k * (d[key] - g[key]); });
+    if (d.tapeOk) {
+      if (!g.tapeOk) { g.tc = d.tc; g.ts = d.ts; g.tw = d.tw; }
+      else { g.tc += k * (d.tc - g.tc); g.ts += k * (d.ts - g.ts); g.tw += k * (d.tw - g.tw); }
+      g.tapeOk = true; g.tapeMiss = 0;
+    } else { g.tapeMiss = (g.tapeMiss || 0) + 1; if (g.tapeMiss > 8) g.tapeOk = false; }
+    g.ok = true; this.n++;
+    return g;
+  };
+
+  // Profile along the tape. geom may be null (manual ROI). opt: {axis, margin, roiCenter, roiWidth, autoTape, tapeFrac}
+  function extractProfile(img, geom, opt) {
+    var W = img.width, H = img.height, D = img.data, vert = opt.axis !== 'h';
+    var Lf = vert ? H : W, Af = vert ? W : H, m = opt.margin == null ? 0.08 : opt.margin;
+    var r = new Float32Array(Lf), g = new Float32Array(Lf), b = new Float32Array(Lf);
+    var i0 = 0, i1 = Lf - 1, useTape = opt.autoTape !== false && geom && geom.ok && geom.tapeOk;
+    if (geom && geom.ok) {
+      var span = geom.l1 - geom.l0;
+      i0 = Math.ceil(geom.l0 + m * span); i1 = Math.floor(geom.l1 - m * span);
+    } else { i0 = Math.ceil(m * Lf); i1 = Math.floor((1 - m) * Lf); }
+    i0 = clamp(i0, 0, Lf - 1); i1 = clamp(i1, i0, Lf - 1);
+    var half, ac0, ac1;
+    for (var l = i0; l <= i1; l++) {
+      var c;
+      if (useTape) { c = geom.tc + geom.ts * l; half = 0.5 * geom.tw * (opt.tapeFrac || 0.6); }
+      else { c = opt.roiCenter * Af; half = 0.5 * opt.roiWidth * Af; }
+      ac0 = clamp(Math.round(c - half), 0, Af - 1); ac1 = clamp(Math.round(c + half), ac0 + 1, Af);
+      var sr = 0, sg = 0, sb = 0, n = ac1 - ac0;
+      for (var a = ac0; a < ac1; a++) {
+        var p = vert ? (l * W + a) * 4 : (a * W + l) * 4;
+        sr += D[p]; sg += D[p + 1]; sb += D[p + 2];
+      }
+      r[l] = sr / n; g[l] = sg / n; b[l] = sb / n;
+    }
+    return { r: r, g: g, b: b, i0: i0, i1: i1, L: Lf, useTape: useTape };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pitch from one profile: normalised autocorrelation, shortest lag with >= 0.8 x highest peak.
+  function acfPitch(x, minLag, maxLag) {
+    var n = x.length; maxLag = Math.min(maxLag, Math.floor(n * 0.62));
+    if (maxLag <= minLag + 2) return null;
+    var rr = new Float32Array(maxLag + 2);
+    for (var lag = 1; lag <= maxLag + 1; lag++) {
+      var sab = 0, saa = 0, sbb = 0, sa = 0, sb = 0, m = n - lag;
+      for (var i = 0; i < m; i++) { var u = x[i], v = x[i + lag]; sa += u; sb += v; saa += u * u; sbb += v * v; sab += u * v; }
+      var cov = sab - sa * sb / m, va = saa - sa * sa / m, vb = sbb - sb * sb / m;
+      rr[lag] = (va > 1e-9 && vb > 1e-9) ? cov / Math.sqrt(va * vb) : 0;
+    }
+    var peaks = [], rmax = 0;
+    for (lag = Math.max(2, minLag); lag <= maxLag; lag++) {
+      if (rr[lag] > rr[lag - 1] && rr[lag] >= rr[lag + 1] && rr[lag] > 0.2) { peaks.push(lag); if (rr[lag] > rmax) rmax = rr[lag]; }
+    }
+    if (!peaks.length) return null;
+    var pick = null;
+    for (var k = 0; k < peaks.length; k++) if (rr[peaks[k]] >= 0.8 * rmax) { pick = peaks[k]; break; }
+    var y0 = rr[pick - 1], y1 = rr[pick], y2 = rr[pick + 1], den = y0 - 2 * y1 + y2;
+    var off = den < 0 ? clamp(0.5 * (y0 - y2) / den, -0.5, 0.5) : 0;
+    // harmonic ambiguity: another peak near p/2 that is fairly strong
+    var amb = false;
+    for (k = 0; k < peaks.length; k++) { var pl = peaks[k]; if (Math.abs(pl - pick / 2) < 0.12 * pick && rr[pl] > 0.55 * rr[pick]) amb = true; }
+    return { p: pick + off, r: y1, amb: amb, rr: rr, len: n };
+  }
+
+  // ---------------------------------------------------------------------------
+  var MSG = {
+    noRegion: 'Kein heller Bereich erkannt – helle/beleuchtete Fläche hinter das Band legen',
+    noTape: 'Band nicht im hellen Bereich gefunden – Band mittig in den hellen Bereich',
+    lowContrast: 'Kein Kontrast – Licht von unten verwenden oder näher ran',
+    learning: 'Lerne Raster… Band ruhig ins Bild halten / langsam ziehen',
+    tooClose: 'Zu nah – weniger als 1½ Etiketten im Messbereich, Handy weiter weg',
+    pitchUnsure: 'Raster unsicher – Abstand/Licht prüfen oder Raster manuell eingeben',
+    pitchAmb: 'Raster unsicher (evtl. halbes Raster) – prüfen, ggf. manuell eingeben',
+    fast: 'Zu schnell/unscharf – langsamer ziehen (max. ~⅓ Etikett pro Bild), Zählung unsicher',
+    dirLearn: 'Zugrichtung wird erkannt… ~2 Etiketten in Zugrichtung ziehen',
+    ok: 'OK – zählt'
+  };
+
+  // Counter: step(P, t) with P from extractProfile (or {r,g,b,i0,i1,L}); t in seconds.
   function Counter(opt) {
-    this.opt = Object.assign({ sensitivity: 6, cut: 0.5, dir: 1, minContrast: 4, rasterCheck: true, hyst: 2, autoDir: true, backHyst: 0.5 }, opt || {});
-    this.onDirChange = null; // callback(dir) when autoDir flips the direction
+    this.opt = Object.assign({ mode: 'auto', dirMode: 'auto', cut: 0.5, minContrast: 1.0, sensitivity: 6, manualPitch: 0, snap: true, S: 40 }, opt || {});
     this.fullReset();
   }
   Counter.prototype.fullReset = function () {
-    this.seps = []; this.P = 0; this.v = 0; this.prevD = null; this.pitch = 0;
-    this.pitchSamples = []; this.nextId = 1; this.bank = 0; this.manual = 0; this.virtualAdded = 0; this.virtualUnverified = 0; this.frame = 0;
-    this.count = 0; this.L = 0;
-    this.Pext = 0; this.dirSettled = false;
+    this.L = 0; this.frame = 0; this.U = 0; this.v = 0; this.gPrev = null; this.kPrev = 0;
+    this.relearn();
+    this.dir = 0; this.dirLocked = false; this.posSum = 0; this.negSum = 0; this.netU = 0;
+    this.resetCount();
+    this.events = [];
   };
-  // Reset the count to 0 but keep tracking state (separators already past the cut line are not counted).
+  Counter.prototype.relearn = function () {
+    this.pitch = 0; this.pitchEst = []; this.pending = null; this.T = null; this.Tn = 0; this.pitchConf = 0; this.amb = false; this.fit = null;
+    this.chan = -1; this.chanVotes = 0; this.beta = null; this.sepMode = false;
+    if (this.opt && this.opt.dirMode === 'auto') { this.dirLocked = false; this.dir = 0; this.posSum = 0; this.negSum = 0; this.netU = 0; }
+    this.o = null;
+  };
   Counter.prototype.resetCount = function () {
-    this.bank = 0; this.manual = 0; this.virtualAdded = 0; this.virtualUnverified = 0;
-    for (var k = 0; k < this.seps.length; k++) this.seps[k].initAfter = this.seps[k].after;
-    this.count = 0;
+    this.U0 = this.U; this.maxD = 0; this.raw = 0; this.manual = 0; this.o = null; this.backT = null; this.flipT = null; this.count = 0;
+    this.kappa0 = null; this.negLogged = false;
   };
-  Counter.prototype.relearnPitch = function () { this.pitch = 0; this.pitchSamples = []; };
-  Counter.prototype.adjust = function (delta) { this.manual += delta; this.count += delta; };
+  Counter.prototype.adjust = function (d) { this.manual += d; this.count = Math.max(0, this.raw + this.manual); };
+  Counter.prototype.flipDir = function () { this.dir = -(this.dir || 1); this.dirLocked = true; this.o = null; this.maxD = Math.max(0, this.dir * (this.U - this.U0)); this.log('dir_manual_flip'); };
+  Counter.prototype.log = function (e) { this.events.push([this.t, e]); if (this.events.length > 200) this.events.shift(); };
 
-  // Flipping the direction negates every contribution exactly (after/initAfter swap sides), so the count is preserved up to sign.
-  Counter.prototype.flipDir = function () {
-    this.opt.dir = -this.opt.dir;
-    this.bank = -this.bank;
-    for (var k = 0; k < this.seps.length; k++) { var S = this.seps[k]; S.after = !S.after; S.initAfter = !S.initAfter; }
-    this.Pext = this.opt.dir * this.P; this.dirSettled = true;
-    if (this.onDirChange) this.onDirChange(this.opt.dir);
-  };
-  // Progress along the configured direction is tracked as a high-water mark; decisions are made in label pitches only, so nothing
-  // flips before the raster is learned. The first net movement of 2 labels decides; afterwards only a pull-back of 3 labels flips
-  // it again (short pull-backs are normal handling). Pull-backs of 1-2 labels before the first forward motion must not flip.
-  Counter.prototype._autoDir = function () {
-    var x = this.opt.dir * this.P;
-    if (x > this.Pext) this.Pext = x;
-    if (!this.pitch) return;
-    var unit = this.pitch;
-    if (!this.dirSettled && this.Pext >= 2 * unit) this.dirSettled = true;
-    if (this.Pext - x > (this.dirSettled ? 3 : 2) * unit) this.flipDir();
-  };
+  Counter.prototype._effPitchPx = function () { return this.opt.manualPitch > 0 ? this.opt.manualPitch : this.pitch; };
 
-  Counter.prototype.process = function (prof) {
-    var o = this.opt, L = prof.length, i, k;
-    if (L !== this.L) { var keepBank = this.bank; this.fullReset(); this.bank = keepBank; this.L = L; }
-    this.frame++;
-    var sm = boxFilter(prof, 1);
-    var r = Math.max(4, Math.round(this.pitch ? this.pitch * 0.25 : L * 0.06));
-    var m = boxFilter(sm, r);
-    var d = new Float32Array(L);
-    for (i = 0; i < L; i++) d[i] = sm[i] - m[i];
-    var med = median(d), dev = new Float32Array(L);
-    for (i = 0; i < L; i++) dev[i] = Math.abs(d[i] - med);
-    var sigma = Math.max(0.5, 1.4826 * median(dev));
-    var kfac = 12 - o.sensitivity;            // sensitivity 1..10 -> k 11..2
-    var thr = Math.max(o.minContrast, kfac * sigma);
-
-    // --- peak detection (bright narrow peaks above local mean) ---
-    var pr = Math.max(3, Math.round(this.pitch ? this.pitch * 0.3 : L * 0.04));
-    var peaks = [];
-    for (i = 2; i < L - 2; i++) {
-      if (d[i] <= thr) continue;
-      var isMax = true;
-      for (var j = Math.max(0, i - pr); j <= Math.min(L - 1, i + pr); j++) {
-        if (d[j] > d[i] || (d[j] === d[i] && j < i)) { isMax = false; break; }
-      }
-      if (!isMax) continue;
-      var y0 = d[i - 1], y1 = d[i], y2 = d[i + 1], den = y0 - 2 * y1 + y2;
-      var off = den !== 0 ? clamp(0.5 * (y0 - y2) / den, -0.5, 0.5) : 0;
-      peaks.push(i + off);
+  Counter.prototype.step = function (P, t) {
+    var o = this.opt, S = o.S, L = P.L, i, k;
+    if (L !== this.L) { this.fullReset(); this.L = L; }
+    this.frame++; this.t = t;
+    var out = { status: 'ok', count: this.count, pitch: this._effPitchPx(), conf: 0, shiftPx: 0, hp: null, i0: P.i0, i1: P.i1, peaks: [], bounds: [], dir: this.dir, dirLocked: this.dirLocked };
+    var i0 = P.i0, i1 = P.i1, n = i1 - i0 + 1;
+    if (n < 30) { out.status = 'noRegion'; this.gPrev = null; return this._finish(out); }
+    // ---- channel choice (highest high-pass variance; sticky) ----
+    var pitchPx = this._effPitchPx();
+    var rad = Math.max(3, Math.round(pitchPx ? pitchPx * 0.5 : L * 0.08));
+    var chans = [P.r, P.g, P.b], hps = [], stds = [];
+    for (var c = 0; c < 3; c++) {
+      var x = chans[c].subarray(i0, i1 + 1), mm = boxFilter(x, rad), hp = new Float32Array(n), s2 = 0;
+      for (i = 0; i < n; i++) { hp[i] = x[i] - mm[i]; s2 += hp[i] * hp[i]; }
+      hps.push(hp); stds.push(Math.sqrt(s2 / n));
     }
-
-    // --- motion estimate: 1D normalized cross-correlation around predicted shift ---
-    var shift = 0, conf = 0;
-    if (this.prevD && this.prevD.length === L) {
-      var pd = this.prevD, R = Math.max(6, Math.round(L * 0.12)), c0 = Math.round(this.v);
-      var best = -2, bs = 0, cs = {};
-      for (var s = c0 - R; s <= c0 + R; s++) {
-        var i0 = Math.max(0, -s), i1 = Math.min(L, L - s);
-        if (i1 - i0 < L * 0.4) continue;
-        var sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = i1 - i0;
-        for (i = i0; i < i1; i++) { var x = pd[i], y = d[i + s]; sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y; }
-        var cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
-        var cc = (va > 1e-6 && vb > 1e-6) ? cov / Math.sqrt(va * vb) : 0;
+    var bestC = stds[0] >= stds[1] ? (stds[0] >= stds[2] ? 0 : 2) : (stds[1] >= stds[2] ? 1 : 2);
+    if (this.chan < 0) this.chan = bestC;
+    else if (bestC !== this.chan && stds[bestC] > 1.3 * stds[this.chan]) { if (++this.chanVotes > 15) { this.chan = bestC; this.chanVotes = 0; this.T = null; this.log('chan_' + 'RGB'[bestC]); } }
+    else this.chanVotes = 0;
+    var hp0 = hps[this.chan], std = stds[this.chan];
+    out.contrast = std; out.chan = 'RGB'[this.chan];
+    if (std < o.minContrast) { out.status = 'lowContrast'; this.gPrev = null; this.v *= 0.5; return this._finish(out); }
+    var hpn = new Float32Array(n); for (i = 0; i < n; i++) hpn[i] = hp0[i] / std;
+    out.hp = hpn;
+    // ---- pitch (continuous, zoom-tolerant) ----
+    var mnL = Math.max(8, Math.round(L * 0.025));
+    var estF = acfPitch(hpn, mnL, Math.round(L * 0.8)), est = estF;
+    // also try each half: when only part of the region shows labels (leader, finger, shadow), the clean half wins.
+    // a half only counts if it holds >= 2.2 periods.
+    var hn = n >> 1;
+    if (hn >= 40) {
+      var halves = [hpn.subarray(0, hn), hpn.subarray(n - hn)];
+      for (var hh = 0; hh < 2; hh++) {
+        var eh = acfPitch(halves[hh], mnL, Math.floor(hn / 2.2));
+        if (eh && eh.p <= hn / 2.2 && (!est || eh.r > est.r + 0.05)) est = eh;
+      }
+    }
+    if (est) out.acf = est.r;
+    this._updatePitch(est, t, estF);
+    pitchPx = this._effPitchPx(); out.pitch = pitchPx; out.pitchConf = this.pitchConf;
+    if (!pitchPx) { out.status = 'learning'; return this._finish(out); }
+    if (n / pitchPx < 1.4) { out.status = 'tooClose'; this.gPrev = null; return this._finish(out); }
+    // ---- resample into label units (S samples per label), origin = image centre ----
+    var cpx = L / 2, kmin = Math.ceil((i0 - cpx) / pitchPx * S), kmax = Math.floor((i1 - cpx) / pitchPx * S), ng = kmax - kmin + 1;
+    var g = new Float32Array(ng);
+    for (k = 0; k < ng; k++) {
+      var pos = cpx + (kmin + k) * pitchPx / S - i0, j = Math.floor(pos), f = pos - j;
+      g[k] = j < 0 ? hpn[0] : j >= n - 1 ? hpn[n - 1] : hpn[j] * (1 - f) + hpn[j + 1] * f;
+    }
+    // ---- motion: NCC against previous frame, sub-sample parabola ----
+    var du = 0, conf = 0;
+    if (this.gPrev) {
+      var gp = this.gPrev, kp = this.kPrev, c0 = Math.round(this.v * S), Rw = Math.round(0.3 * S), lim = Math.floor(0.48 * S);
+      var sLo = Math.max(-lim, c0 - Rw), sHi = Math.min(lim, c0 + Rw), cs = {}, best = -2, bs = 0;
+      for (var s = sLo; s <= sHi; s++) {
+        var ka = Math.max(kp, kmin - s), kb = Math.min(kp + gp.length - 1, kmax - s), m = kb - ka + 1;
+        if (m < 0.4 * Math.min(gp.length, ng)) { cs[s] = -2; continue; }
+        var sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+        for (k = ka; k <= kb; k++) { var u = gp[k - kp], w = g[k + s - kmin]; sa += u; sb += w; saa += u * u; sbb += w * w; sab += u * w; }
+        var cov = sab - sa * sb / m, va = saa - sa * sa / m, vb = sbb - sb * sb / m;
+        var cc = (va > 1e-9 && vb > 1e-9) ? cov / Math.sqrt(va * vb) : 0;
         cs[s] = cc;
-        if (cc > best) { best = cc; bs = s; }
+        var score = cc - 0.002 * Math.abs(s - c0);
+        if (score > best) { best = score; bs = s; }
       }
-      conf = best;
-      if (best > 0.3) {
-        shift = bs;
-        if (cs[bs - 1] !== undefined && cs[bs + 1] !== undefined) {
-          var dn = cs[bs - 1] - 2 * best + cs[bs + 1];
-          if (dn < 0) shift = bs + clamp(0.5 * (cs[bs - 1] - cs[bs + 1]) / dn, -0.5, 0.5);
+      conf = cs[bs];
+      if (conf > 0.4) {
+        var sh = bs;
+        if (cs[bs - 1] > -2 && cs[bs + 1] > -2) { var dn = cs[bs - 1] - 2 * conf + cs[bs + 1]; if (dn < 0) sh = bs + clamp(0.5 * (cs[bs - 1] - cs[bs + 1]) / dn, -0.5, 0.5); }
+        du = sh / S; this.v = du; this.lowConfN = 0;
+      } else { du = this.v * 0.5; this.v *= 0.5; this.lowConfN = (this.lowConfN || 0) + 1; }
+    }
+    this.U += du;
+    out.conf = conf; out.shiftPx = du * pitchPx;
+    // ---- phase snapping against the periodic template (works for any periodic pattern) ----
+    var snapCC = 0;
+    if (!this.T) { this._buildTemplate(g, kmin); }
+    else if (o.snap) {
+      var T = this.T, bestD = 0, bestV = -2, sc2 = {};
+      var half = S >> 1;
+      for (var dd = -half; dd < half; dd++) {
+        var sa2 = 0, sb2 = 0, saa2 = 0, sbb2 = 0, sab2 = 0;
+        for (k = 0; k < ng; k++) {
+          var bi = mod(kmin + k - this.U * S - dd, S), b0 = Math.floor(bi), bf = bi - b0;
+          var tv = T[b0 % S] * (1 - bf) + T[(b0 + 1) % S] * bf, gv = g[k];
+          sa2 += gv; sb2 += tv; saa2 += gv * gv; sbb2 += tv * tv; sab2 += gv * tv;
         }
-      } else {
-        shift = this.v * 0.5; // low confidence: decay prediction
+        var cov2 = sab2 - sa2 * sb2 / ng, va2 = saa2 - sa2 * sa2 / ng, vb2 = sbb2 - sb2 * sb2 / ng;
+        var c2 = (va2 > 1e-9 && vb2 > 1e-9) ? cov2 / Math.sqrt(va2 * vb2) : 0;
+        sc2[dd] = c2; if (c2 > bestV) { bestV = c2; bestD = dd; }
+      }
+      var dl = bestD, a1 = sc2[bestD - 1 < -half ? half - 1 : bestD - 1], a2 = sc2[bestD + 1 >= half ? -half : bestD + 1], dn2 = a1 - 2 * bestV + a2;
+      if (dn2 < 0) dl = bestD + clamp(0.5 * (a1 - a2) / dn2, -0.5, 0.5);
+      snapCC = bestV;
+      var delta = dl / S;
+      // fuse with separator peaks (Durchlicht)
+      if (this.sepMode && this.beta != null) {
+        var pk = this._peaks(hpn, pitchPx), ds = [];
+        for (var q = 0; q < pk.length; q++) { var lu = (i0 + pk[q] - cpx) / pitchPx; ds.push(wrapHalf(lu - this.U - this.beta)); }
+        if (ds.length) { var dm = median(ds); if (bestV < 0.5 && Math.abs(dm) < 0.3) { delta = dm; snapCC = 0.5; } }
+      }
+      if (snapCC > 0.45 && Math.abs(delta) < 0.3) {
+        this.U += 0.5 * delta;
+        // slow template adaptation
+        if (snapCC > 0.55) this._adaptTemplate(g, kmin, 0.03);
       }
     }
-    this.prevD = d;
-    this.P += shift;
-
-    // --- match peaks to tracked separators; refine motion with median residual ---
-    var tol = this.pitch ? 0.4 * this.pitch : L * 0.08;
-    var pairs = [];
-    for (k = 0; k < this.seps.length; k++) {
-      var sp = this.seps[k]; sp.u = sp.t + this.P; sp.matched = false;
-      for (var q = 0; q < peaks.length; q++) {
-        var dist = Math.abs(peaks[q] - sp.u);
-        if (dist < tol) pairs.push([dist, k, q]);
-      }
+    out.snapCC = snapCC;
+    this.gPrev = g; this.kPrev = kmin;
+    // ---- separator detection in template (Auto) ----
+    this._classify();
+    out.peaks = this._peaks(hpn, pitchPx).map(function (p) { return p + i0; });
+    // ---- direction ----
+    if (du > 0) this.posSum += du; else this.negSum -= du;
+    this.netU += du;
+    if (o.dirMode === 'fwd') { this.dir = 1; this.dirLocked = true; }
+    else if (o.dirMode === 'rev') { this.dir = -1; this.dirLocked = true; }
+    else if (!this.dirLocked) {
+      var tot = this.posSum + this.negSum;
+      if (Math.abs(this.netU) >= 2 && Math.abs(this.netU) >= 0.6 * tot) { this.dir = this.netU > 0 ? 1 : -1; this.dirLocked = true; this.o = null; this.log('dir_locked_' + this.dir); }
     }
-    pairs.sort(function (a, b) { return a[0] - b[0]; });
-    var usedS = {}, usedP = {}, matches = [];
-    for (k = 0; k < pairs.length; k++) {
-      var pp = pairs[k];
-      if (usedS[pp[1]] || usedP[pp[2]]) continue;
-      usedS[pp[1]] = 1; usedP[pp[2]] = 1; matches.push([pp[1], pp[2]]);
+    // ---- counting: count = floor((maxD - o)) + 1, maxD monotonic (slip-back costs nothing) ----
+    var dirE = this.dir || ((this.U - this.U0) >= 0 ? 1 : -1);
+    var D = dirE * (this.U - this.U0);
+    if (this.kappa0 == null) this.kappa0 = (o.cut * L - cpx) / pitchPx;
+    if (this.o == null) this.o = this._offset(dirE);
+    if (D > this.maxD) this.maxD = D;
+    // deliberate pull-back (> 1 label, sustained 0.5 s) lowers maxD so the count follows
+    if (this.maxD - D > 1.0) { if (this.backT == null) this.backT = t; else if (t - this.backT > 0.5) { this.maxD = D + 0.5; this.backT = null; this.log('pull_back'); } }
+    else this.backT = null;
+    // auto flip: clearly pulling against the locked direction from the reset point
+    if (o.dirMode === 'auto' && this.dirLocked && D < -1.5 && this.maxD < 0.5) {
+      if (this.flipT == null) this.flipT = t; else if (t - this.flipT > 0.5) { this.dir = -this.dir; this.o = null; this.maxD = -D; this.flipT = null; this.log('dir_auto_flip'); }
+    } else this.flipT = null;
+    if (D < -0.5 && !this.negLogged) { this.negLogged = true; this.log('neg_clamped'); }
+    var rawN = this.maxD >= this.o ? Math.floor(this.maxD - this.o) + 1 : 0;
+    this.raw = Math.max(0, rawN);
+    out.D = D; out.maxD = this.maxD; out.o = this.o; out.dir = this.dir; out.dirLocked = this.dirLocked; out.dirEff = dirE;
+    // boundaries for display (screen px along axis)
+    var tb = this.sepMode && this.beta != null ? this.beta : (this.kappa0 - this.U0 - dirE * this.o);
+    for (var mI = -40; mI <= 40; mI++) { var bp = cpx + (tb + this.U + mI) * pitchPx; if (bp >= i0 && bp <= i1) out.bounds.push(bp); }
+    // ---- status ----
+    if (this.amb) out.status = 'pitchAmb';
+    else if (this.pitchConf < 0.35 && !(o.manualPitch > 0)) out.status = 'pitchUnsure';
+    else if ((this.lowConfN > 3 && Math.abs(this.v) > 0.05) || Math.abs(this.v) > 0.35) out.status = 'fast';
+    else if (!this.dirLocked) out.status = 'dirLearn';
+    return this._finish(out);
+  };
+  Counter.prototype._finish = function (out) {
+    this.count = Math.max(0, this.raw + this.manual);
+    out.count = this.count; out.U = this.U; out.msg = MSG[out.status] || MSG.ok;
+    out.mode = this.sepMode ? 'Trennsteg' : 'Motiv'; out.pitchConf = this.pitchConf;
+    return out;
+  };
+  Counter.prototype._offset = function (dirE) {
+    if (this.sepMode && this.beta != null) {
+      var dlt = mod(dirE * (this.kappa0 - this.beta - this.U0), 1);
+      return dlt < 0.2 ? dlt + 1 : dlt;
     }
-    var resid = 0;
-    if (matches.length) {
-      var rs = matches.map(function (mm) { return peaks[mm[1]] - this.seps[mm[0]].u; }, this);
-      resid = median(rs);
-      this.P += resid;
-    }
-    this.v = shift + resid;
-    if (o.autoDir) this._autoDir();
-    for (k = 0; k < matches.length; k++) {
-      var sm2 = this.seps[matches[k][0]], pk = peaks[matches[k][1]];
-      var u2 = sm2.t + this.P;
-      sm2.t += 0.5 * (pk - u2);
-      sm2.seen++; sm2.missed = 0; sm2.matched = true; sm2.realHits = (sm2.realHits || 0) + 1;
-      if (sm2.virtual && sm2.realHits >= 3) sm2.virtual = false; // confirmed by real detections
-    }
-    var cutU = o.cut * L, dir = o.dir;
-    var self = this;
-    function sideOf(u) { return dir * (u - cutU) > 0; }
-    // new separators from unmatched peaks
-    var minNew = this.pitch ? 0.6 * this.pitch : tol;
-    for (q = 0; q < peaks.length; q++) {
-      if (usedP[q]) continue;
+    return 1; // Motiv: Bandanfang liegt beim RESET an der Schnittlinie
+  };
+  Counter.prototype._peaks = function (hpn, p) {
+    var thr = 1.2 + (10 - this.opt.sensitivity) * 0.25, rad = Math.max(2, Math.round(0.3 * p)), pk = [];
+    for (var i = 1; i < hpn.length - 1; i++) {
+      if (hpn[i] < thr) continue;
       var ok = true;
-      for (k = 0; k < this.seps.length; k++) if (Math.abs(this.seps[k].t + this.P - peaks[q]) < minNew) { ok = false; break; }
-      if (!ok) continue;
-      var aft = sideOf(peaks[q]);
-      this.seps.push({ id: this.nextId++, t: peaks[q] - this.P, seen: 1, missed: 0, confirmed: false, after: aft, initAfter: aft, virtual: false, matched: true, born: this.frame });
+      for (var j = Math.max(0, i - rad); j <= Math.min(hpn.length - 1, i + rad); j++) if (hpn[j] > hpn[i] || (hpn[j] === hpn[i] && j < i)) { ok = false; break; }
+      if (ok) pk.push(i);
     }
-
-    // --- update states, hysteresis crossing (asymmetric: quick in, slow out), pruning ---
-    var h = o.hyst, hb = Math.max(h, o.backHyst * (this.pitch || 0.16 * L)), keep = [];
-    for (k = 0; k < this.seps.length; k++) {
-      var S = this.seps[k], u = S.t + this.P; S.u = u;
-      var rel = dir * (u - cutU);
-      if (!S.after && rel > h) S.after = true;
-      else if (S.after && rel < -hb) S.after = false;
-      var inView = u > 3 && u < L - 3;
-      if (inView && !S.matched && !S.virtual) S.missed++;
-      if (!S.confirmed && S.seen >= 3) { S.confirmed = true; this._onConfirm(S); }
-      var contrib = (S.after ? 1 : 0) - (S.initAfter ? 1 : 0);
-      if (u < -0.1 * L || u > 1.1 * L) { if (S.confirmed) this.bank += contrib; if (S.virtual) this.virtualUnverified++; continue; } // left the view: bank
-      if (!S.confirmed && S.missed > 3) continue;                                               // unconfirmed noise
-      if (S.confirmed && !S.virtual && inView && S.missed > 30 && contrib === 0) continue;       // stale false positive
-      keep.push(S);
+    return pk;
+  };
+  Counter.prototype._buildTemplate = function (g, kmin) {
+    var S = this.opt.S, T = new Float32Array(S), N = new Float32Array(S);
+    for (var k = 0; k < g.length; k++) { var b = Math.round(mod(kmin + k - this.U * this.opt.S, S)) % S; T[b] += g[k]; N[b]++; }
+    for (var b2 = 0; b2 < S; b2++) T[b2] = N[b2] ? T[b2] / N[b2] : 0;
+    this.T = T; this.Tn = 1;
+  };
+  Counter.prototype._adaptTemplate = function (g, kmin, a) {
+    var S = this.opt.S, T = this.T;
+    for (var k = 0; k < g.length; k++) { var b = Math.round(mod(kmin + k - this.U * S, S)) % S; T[b] += a * (g[k] - T[b]); }
+    this.Tn++;
+  };
+  Counter.prototype._classify = function () {
+    var mode = this.opt.mode, T = this.T, S = this.opt.S;
+    if (!T) return;
+    var mi = 0, b; for (b = 1; b < S; b++) if (T[b] > T[mi]) mi = b;
+    var med = median(T), dev = [];
+    for (b = 0; b < S; b++) dev.push(Math.abs(T[b] - med));
+    var sig = Math.max(1e-6, 1.4826 * median(dev)), prom = (T[mi] - med) / sig;
+    var w = 0, hl = med + 0.5 * (T[mi] - med); for (b = 0; b < S; b++) if (T[b] > hl) w++;
+    var second = -1e9; for (b = 0; b < S; b++) { var dd = Math.min(Math.abs(b - mi), S - Math.abs(b - mi)); if (dd > 0.15 * S && T[b] > second) second = T[b]; }
+    var narrow = w <= 0.15 * S && prom > 4 && (second - med) < 0.6 * (T[mi] - med);
+    var was = this.sepMode;
+    this.sepMode = mode === 'back' ? true : mode === 'motif' ? false : narrow;
+    var beta = mi / S;
+    if (this.sepMode && (this.beta == null || !was)) { this.beta = beta; this.o = null; }
+    else if (this.sepMode) this.beta = beta;
+    if (was !== this.sepMode) { this.o = null; this.log(this.sepMode ? 'mode_sep' : 'mode_motif'); }
+  };
+  Counter.prototype._updatePitch = function (est, t, estF) {
+    if (this.opt.manualPitch > 0) { this.pitchConf = 1; this.amb = false; return; }
+    if (est && est.r >= 0.3) { this.pitchEst.push(est); if (this.pitchEst.length > 9) this.pitchEst.shift(); }
+    // fit of the CURRENT pitch in this frame's ACF (detects a wrong lock, e.g. learned on leader/partial labels)
+    if (this.pitch && estF && estF.rr) { var lp = Math.round(this.pitch), fv = lp < estF.rr.length ? estF.rr[lp] : 0; this.fit = this.fit == null ? fv : this.fit + 0.2 * (fv - this.fit); }
+    if (this.pitchEst.length < 5) return;
+    var ps = this.pitchEst.map(function (e) { return e.p; }), cand = median(ps);
+    var spread = median(ps.map(function (p) { return Math.abs(p - cand); })) / cand;
+    var rmed = median(this.pitchEst.map(function (e) { return e.r; }));
+    var ambN = this.pitchEst.filter(function (e) { return e.amb; }).length;
+    this.amb = ambN > this.pitchEst.length / 2;
+    if (!this.pitch) {
+      // initial lock only on a clearly periodic profile (r >= 0.6) – weak texture (leader, single label) is rejected
+      if (spread < 0.06 && rmed >= 0.7 && cand * 2.2 <= median(this.pitchEst.map(function (e) { return e.len; }))) { this.pitch = cand; this.fit = rmed; this.T = null; this.gPrev = null; this.log('pitch_learned_' + cand.toFixed(1)); }
+    } else if (Math.abs(cand / this.pitch - 1) < 0.2) {
+      if (spread < 0.08 && rmed >= 0.45) this.pitch += 0.3 * (cand - this.pitch);
+      this.pending = null;
+    } else {
+      if (this.pending && Math.abs(cand / this.pending.p - 1) < 0.1 && spread < 0.08 && rmed >= 0.5 && (cand < this.pitch || cand * 1.8 <= median(this.pitchEst.map(function (e) { return e.len; })))) {
+        // stable change: accept after 1 s; if the current pitch clearly no longer fits, accept after 0.25 s
+        var need = (this.fit != null && this.fit < 0.3 && rmed >= 0.6) ? 0.25 : 1.0;
+        if (t - this.pending.t0 >= need) { this.log('pitch_jump_' + this.pitch.toFixed(1) + '->' + cand.toFixed(1)); this.pitch = cand; this.fit = rmed; this.T = null; this.gPrev = null; this.pending = null; this.o = null; this.beta = null; }
+      } else this.pending = { p: cand, t0: t };
     }
-    this.seps = keep;
-
-    // merge duplicates (drift)
-    var conf2 = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return a.t - b.t; });
-    var mergeD = this.pitch ? 0.45 * this.pitch : L * 0.04;
-    for (k = 1; k < conf2.length; k++) {
-      if (conf2[k].t - conf2[k - 1].t < mergeD) {
-        var drop = conf2[k].born > conf2[k - 1].born ? conf2[k] : conf2[k - 1];
-        drop.dead = true;
-      }
-    }
-    this.seps = this.seps.filter(function (s2) { return !s2.dead; });
-
-    // raster check: insert missing separators in ~2x, 3x pitch gaps
-    var inserted = 0;
-    if (o.rasterCheck && this.pitch) {
-      conf2 = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return a.t - b.t; });
-      for (k = 1; k < conf2.length; k++) {
-        var gap = conf2[k].t - conf2[k - 1].t, nn = Math.round(gap / this.pitch);
-        if (nn >= 2 && nn <= 4 && Math.abs(gap - nn * this.pitch) < 0.2 * nn * this.pitch) {
-          // "upstream" neighbour = the one that entered later (smaller dir*t)
-          var up = dir > 0 ? conf2[k - 1] : conf2[k];
-          // only fill gaps that are fully observed (both ends inside the view)
-          var ua = conf2[k - 1].t + this.P, ub = conf2[k].t + this.P;
-          if (ua < 0 || ub > L) continue;
-          for (var z = 1; z < nn; z++) {
-            var tt = conf2[k - 1].t + gap * z / nn, uu = tt + this.P;
-            var af = sideOf(uu);
-            this.seps.push({ id: this.nextId++, t: tt, seen: 99, missed: 0, confirmed: true, after: af,
-              initAfter: up.initAfter, virtual: true, matched: false, born: this.frame, u: uu });
-            inserted++;
-          }
-        }
-      }
-    }
-    // edge extrapolation: with a learned pitch, predict the next separator entering/leaving at the view edges
-    // (dead reckoning on the image-based motion; real detections re-sync it as soon as they match)
-    if (o.rasterCheck && this.pitch) {
-      var ca = this.seps.filter(function (s2) { return s2.confirmed; }).sort(function (a, b) { return (a.t + self.P) - (b.t + self.P); });
-      if (ca.length) {
-        var pt = this.pitch, edge = 0.15 * pt, cands = [];
-        var upS = dir > 0 ? ca[0] : ca[ca.length - 1], dnS = dir > 0 ? ca[ca.length - 1] : ca[0];
-        cands.push(upS.t + this.P - dir * pt, dnS.t + this.P + dir * pt);
-        for (var ci = 0; ci < cands.length; ci++) {
-          var nu2 = cands[ci];
-          if (nu2 < edge || nu2 > L - edge) continue;
-          var clash = false;
-          for (k = 0; k < this.seps.length; k++) if (this.seps[k].confirmed && Math.abs(this.seps[k].t + this.P - nu2) < 0.5 * pt) { clash = true; break; }
-          if (clash) continue;
-          var sd = sideOf(nu2);
-          this.seps.push({ id: this.nextId++, t: nu2 - this.P, seen: 99, missed: 0, confirmed: true, after: sd, initAfter: sd,
-            virtual: true, matched: false, born: this.frame, u: nu2 });
-          inserted++;
-        }
-      }
-    }
-    this.virtualAdded += inserted;
-
-    var cnt = this.bank + this.manual;
-    for (k = 0; k < this.seps.length; k++) {
-      var S2 = this.seps[k];
-      if (S2.confirmed) cnt += (S2.after ? 1 : 0) - (S2.initAfter ? 1 : 0);
-    }
-    this.count = cnt;
-    return { count: cnt, peaks: peaks, sm: sm, mean: m, thr: thr, shift: this.v, conf: conf, pitch: this.pitch, seps: this.seps, inserted: inserted };
+    this.pitchConf = this.pitch ? clamp(Math.min(rmed, this.fit == null ? rmed : Math.max(0, this.fit)) * (1 - clamp(spread * 8, 0, 1)), 0, 1) : 0;
   };
 
-  Counter.prototype._onConfirm = function (S) {
-    // pitch learning: distance to the nearest other confirmed separator
-    var best = Infinity;
-    for (var k = 0; k < this.seps.length; k++) {
-      var o2 = this.seps[k];
-      if (o2 === S || !o2.confirmed || o2.virtual) continue;
-      var dd = Math.abs(o2.t - S.t);
-      if (dd < best) best = dd;
-    }
-    if (best < Infinity && best > this.L * 0.06) {
-      this.pitchSamples.push(best);
-      if (this.pitchSamples.length > 15) this.pitchSamples.shift();
-      if (this.pitchSamples.length >= 4) {
-        // use the lower half-ish median to avoid 2x gaps from misses
-        var sorted = this.pitchSamples.slice().sort(function (a, b) { return a - b; });
-        var med = median(sorted);
-        var good = sorted.filter(function (x) { return Math.abs(x - med) < 0.2 * med; });
-        if (good.length >= 3) this.pitch = median(good);
-      }
-    }
-  };
-
-  return { extractProfile: extractProfile, Counter: Counter, boxFilter: boxFilter, median: median };
+  return { VERSION: VERSION, Geometry: Geometry, extractProfile: extractProfile, Counter: Counter, acfPitch: acfPitch, boxFilter: boxFilter, median: median, MSG: MSG };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
 // ===== CORE END =====
@@ -392,42 +541,48 @@ if (typeof module !== 'undefined') module.exports = Core;
   var video = $('video'), view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
   var graph = $('graph'), gctx = graph.getContext('2d');
   var stream = null, track = null, running = false, torchOn = false;
-  var counter = new Core.Counter();
-  var lastCount = 0, frames = 0, fpsT = performance.now(), fps = 0, lastRes = null;
+  var counter = new Core.Counter(), geo = new Core.Geometry(), geom = null, gN = 0;
+  var lastCount = 0, frames = 0, fpsT = performance.now(), fps = 0, lastRes = null, t0 = null;
   var rec = null, wakeLock = null;
+  document.title = 'Etiketten-Zähler ' + Core.VERSION;
+  $('ver').textContent = 'Etiketten-Zähler ' + Core.VERSION;
 
   // ---------- settings ----------
-  var S = { target: 37, axis: 'v', reverse: false, autoDir: true, cut: 50, roiC: 50, roiW: 30, sens: 6, raster: true, tick: true, cam: '' };
-  try { Object.assign(S, JSON.parse(localStorage.getItem('labelCounterSettings') || '{}')); } catch (e) {}
+  var S = { target: 37, axis: 'v', mode: 'auto', dirMode: 'auto', autoTape: true, margin: 8, cut: 50, roiC: 50, roiW: 30, sens: 6, manPitch: 0, raster: true, tick: true, cam: '' };
+  try {
+    var old = JSON.parse(localStorage.getItem('labelCounterSettings') || '{}');
+    if (old.dirMode === undefined && old.reverse !== undefined) old.dirMode = (old.autoDir === true || !old.reverse) ? 'auto' : 'rev'; // v1/v1.1 migration
+    delete old.reverse; delete old.autoDir; Object.assign(S, old);
+  } catch (e) {}
   function save() { try { localStorage.setItem('labelCounterSettings', JSON.stringify(S)); } catch (e) {} }
   function applyUI() {
-    $('target').value = S.target; $('axis').value = S.axis; $('reverse').checked = S.reverse; $('autoDir').checked = S.autoDir;
+    $('target').value = S.target; $('axis').value = S.axis; $('mode').value = S.mode; $('dirMode').value = S.dirMode;
+    $('autoTape').checked = S.autoTape; $('margin').value = S.margin; $('manPitch').value = S.manPitch;
     $('cut').value = S.cut; $('roiC').value = S.roiC; $('roiW').value = S.roiW; $('sens').value = S.sens;
     $('raster').checked = S.raster; $('tick').checked = S.tick;
     $('cutV').textContent = S.cut + '%'; $('roiCV').textContent = S.roiC + '%'; $('roiWV').textContent = S.roiW + '%';
-    $('sensV').textContent = S.sens;
-    $('dirHint').textContent = S.axis === 'v' ? (S.reverse ? 'zählt bei Zug nach OBEN' : 'zählt bei Zug nach UNTEN')
-                                              : (S.reverse ? 'zählt bei Zug nach LINKS' : 'zählt bei Zug nach RECHTS');
+    $('sensV').textContent = S.sens; $('marginV').textContent = S.margin + '%';
     $('targetShow').textContent = S.target;
-    counter.opt.sensitivity = +S.sens; counter.opt.cut = S.cut / 100; counter.opt.dir = S.reverse ? -1 : 1;
-    counter.opt.rasterCheck = S.raster; counter.opt.autoDir = S.autoDir;
+    var o = counter.opt;
+    o.sensitivity = +S.sens; o.cut = S.cut / 100; o.mode = S.mode; o.dirMode = S.dirMode; o.manualPitch = +S.manPitch || 0; o.snap = !!S.raster;
+    if (S.dirMode === 'auto' && counter.dirLocked && counter._wasFixed) { counter.dirLocked = false; counter.dir = 0; counter.posSum = counter.negSum = counter.netU = 0; }
+    counter._wasFixed = S.dirMode !== 'auto';
     updateCountUI();
   }
-  // autoDir flipped the direction: mirror it into the "umkehren" setting so arrow and hint stay truthful (no reset, the count is kept)
-  counter.onDirChange = function (dir) {
-    S.reverse = dir < 0; save(); applyUI();
-    setStatus('Zugrichtung automatisch erkannt: ' + $('dirHint').textContent + '.');
-    if (rec) rec.push([Date.now(), 'autodir', counter.count, (counter.P || 0).toFixed(1), dir, fps.toFixed(1)]);
-  };
   function bind(id, key, conv, full) {
-    $(id).addEventListener('input', function (e) {
+    $(id).addEventListener(id === 'manPitch' || id === 'target' ? 'change' : 'input', function (e) {
       var el = e.target; S[key] = el.type === 'checkbox' ? el.checked : conv(el.value);
-      save(); applyUI(); if (full) { counter.fullReset(); lastCount = 0; }
+      save(); applyUI();
+      if (full === 'full') { counter.fullReset(); geo.reset(); geom = null; lastCount = 0; updateCountUI(); }
+      else if (full === 'relearn') { counter.relearn(); }
+      logEv('setting_' + key + '=' + S[key]);
     });
   }
   bind('target', 'target', function (v) { return Math.max(1, parseInt(v, 10) || 1); });
-  bind('axis', 'axis', String, true); bind('reverse', 'reverse', Boolean, true); bind('autoDir', 'autoDir', Boolean);
-  bind('cut', 'cut', Number, true); bind('roiC', 'roiC', Number, true); bind('roiW', 'roiW', Number, true);
+  bind('axis', 'axis', String, 'full'); bind('mode', 'mode', String, 'relearn'); bind('dirMode', 'dirMode', String);
+  bind('autoTape', 'autoTape', Boolean, 'relearn'); bind('margin', 'margin', Number);
+  bind('manPitch', 'manPitch', function (v) { return Math.max(0, parseFloat(v) || 0); }, 'relearn');
+  bind('cut', 'cut', Number, 'full'); bind('roiC', 'roiC', Number); bind('roiW', 'roiW', Number);
   bind('sens', 'sens', Number); bind('raster', 'raster', Boolean); bind('tick', 'tick', Boolean);
 
   // ---------- audio ----------
@@ -462,40 +617,48 @@ if (typeof module !== 'undefined') module.exports = Core;
 
   // ---------- UI helpers ----------
   function setStatus(t) { $('status').textContent = t; }
+  function setDiag(t, cls) { var d = $('diag'); d.textContent = t; d.className = cls || ''; }
   function updateCountUI() {
     var c = counter.count, N = S.target, el = $('count');
     el.textContent = c;
     el.className = c > N ? 'over' : c === N ? 'done' : c >= N - 5 ? 'warn' : '';
     $('remain').textContent = c > N ? ('⚠ ' + (c - N) + ' zu viel!') : c === N ? '✂ JETZT SCHNEIDEN' : ('noch ' + (N - c));
   }
+  function logEv(ev) { if (rec) rec.push([Date.now(), ev, counter.count, '', '', '', '', '', '', '', '', '', '', '']); }
   function onCount(c) {
     if (c === lastCount) return;
-    if (c > lastCount) { for (var x = lastCount + 1; x <= c; x++) if (x === c) feedback(x); }
+    if (c > lastCount) feedback(c);
     else tone(330, 0.08, 0, 'sine', 0.3);
-    if (rec) rec.push([Date.now(), 'count', c, (counter.P || 0).toFixed(1), (counter.v || 0).toFixed(2), fps.toFixed(1)]);
+    logEv('count');
     lastCount = c; updateCountUI();
   }
 
   $('resetBtn').addEventListener('click', function () {
-    ensureAudio(); counter.resetCount(); lastCount = 0; updateCountUI(); tone(700, 0.06, 0, 'sine', 0.3);
-    if (rec) rec.push([Date.now(), 'reset', 0, '', '', '']);
+    ensureAudio(); counter.resetCount(); lastCount = 0; updateCountUI(); tone(700, 0.06, 0, 'sine', 0.3); logEv('reset');
   });
-  $('plusBtn').addEventListener('click', function () { counter.adjust(1); onCount(counter.count); if (rec) rec.push([Date.now(), 'manual+1', counter.count, '', '', '']); });
-  $('minusBtn').addEventListener('click', function () { counter.adjust(-1); onCount(counter.count); if (rec) rec.push([Date.now(), 'manual-1', counter.count, '', '', '']); });
+  $('plusBtn').addEventListener('click', function () { counter.adjust(1); onCount(counter.count); logEv('manual+1'); });
+  $('minusBtn').addEventListener('click', function () { counter.adjust(-1); onCount(counter.count); logEv('manual-1'); });
+  $('flipBtn').addEventListener('click', function () {
+    if (S.dirMode === 'fwd' || S.dirMode === 'rev') { S.dirMode = S.dirMode === 'fwd' ? 'rev' : 'fwd'; save(); applyUI(); counter.flipDir(); }
+    else counter.flipDir();
+    lastCount = counter.count; updateCountUI(); logEv('dir_flip'); tone(600, 0.06, 0, 'sine', 0.3);
+  });
   $('testSound').addEventListener('click', function () {
-    ensureAudio(); var N = S.target, d = 0;
+    ensureAudio(); var N = S.target;
     [N - 5, N - 4, N - 3, N - 2, N - 1].forEach(function (c, i) { setTimeout(function () { feedback(c); }, i * 350); });
     setTimeout(function () { feedback(N); }, 5 * 350 + 200);
     setTimeout(function () { feedback(N + 1); }, 5 * 350 + 1200);
   });
-  $('relearn').addEventListener('click', function () { counter.relearnPitch(); });
+  $('relearn').addEventListener('click', function () { counter.relearn(); geo.reset(); geom = null; logEv('relearn'); setStatus('Neu anlernen: ~3–5 Etiketten langsam durchziehen, dann RESET.'); });
+  var CSVH = 'time_ms,event,count,t_s,status,pitch_px,pitch_conf,conf,snap_cc,shift_px,U_labels,dir,dir_locked,mode,chan,fps\n';
   $('recBtn').addEventListener('click', function () {
     if (rec) { $('recBtn').textContent = '● Debug-Log aufnehmen'; $('recInfo').textContent = 'Log gestoppt: ' + rec.length + ' Einträge'; window._lastLog = rec; rec = null; }
-    else { rec = []; window._lastLog = rec; $('recBtn').textContent = '■ Log stoppen'; $('recInfo').textContent = 'Log läuft…'; }
+    else { rec = []; window._lastLog = rec; $('recBtn').textContent = '■ Log stoppen'; $('recInfo').textContent = 'Log läuft… (jedes Bild)'; }
   });
   $('dlBtn').addEventListener('click', function () {
     var L = rec || window._lastLog || [];
-    var csv = 'time_ms,event,count,tape_pos,shift_per_frame,fps\n' + L.map(function (r) { return r.join(','); }).join('\n');
+    var ev = counter.events.map(function (e) { return '# ' + e[0].toFixed(3) + ' ' + e[1]; }).join('\n');
+    var csv = '# ' + Core.VERSION + ' ' + navigator.userAgent.replace(/,/g, ' ') + '\n' + CSVH + L.map(function (r) { return r.join(','); }).join('\n') + '\n' + ev + '\n';
     var blob = new Blob([csv], { type: 'text/csv' }), a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'etiketten-log-' + Date.now() + '.csv';
     document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 1000);
@@ -535,8 +698,8 @@ if (typeof module !== 'undefined') module.exports = Core;
     var st = track.getSettings ? track.getSettings() : {};
     $('torchBtn').disabled = !caps.torch;
     $('torchBtn').textContent = caps.torch ? '🔦 Licht' : '🔦 Licht (nicht unterstützt)';
-    setStatus('Kamera läuft: ' + (st.width || '?') + '×' + (st.height || '?') + ' @ ' + (st.frameRate ? Math.round(st.frameRate) : '?') + ' fps angefragt. Band unter den blauen Rahmen legen, ~5 Etiketten langsam zum Einlernen durchziehen, dann RESET.');
-    running = true; counter.fullReset(); lastCount = 0; updateCountUI();
+    setStatus('Kamera läuft: ' + (st.width || '?') + '×' + (st.height || '?') + ' @ ' + (st.frameRate ? Math.round(st.frameRate) : '?') + ' fps angefragt. Band auf helle Fläche, ~3–5 Etiketten langsam durchziehen, dann RESET.');
+    running = true; counter.fullReset(); geo.reset(); geom = null; t0 = null; lastCount = 0; updateCountUI(); logEv('camera_restart');
     listCams();
     loop();
   }
@@ -556,84 +719,94 @@ if (typeof module !== 'undefined') module.exports = Core;
   });
 
   // ---------- frame loop ----------
-  var loopScheduled = false;
+  var loopScheduled = false, lastVT = -1;
   function schedule() {
     if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick);
     else requestAnimationFrame(tick);
   }
   function loop() { if (!loopScheduled) { loopScheduled = true; schedule(); } }
-  var lastVT = -1;
   function tick(now, meta) {
     if (!running) { loopScheduled = false; return; }
     schedule();
     if (video.readyState < 2 || !video.videoWidth) return;
     if (!meta) { if (video.currentTime === lastVT) return; lastVT = video.currentTime; } // rAF fallback: skip duplicate frames
-    var vw = video.videoWidth, vh = video.videoHeight, sc = 400 / Math.max(vw, vh);
+    // time base: capture/media timestamp of the frame (robust against UI jank), else performance.now
+    var t = meta && meta.mediaTime != null ? meta.mediaTime : performance.now() / 1000;
+    if (t0 == null || t < t0) t0 = t;
+    var vw = video.videoWidth, vh = video.videoHeight, sc = 400 / Math.max(vw, vh); // downscaled analysis (iOS performance)
     var w = Math.round(vw * sc), h = Math.round(vh * sc);
-    if (view.width !== w || view.height !== h) { view.width = w; view.height = h; }
+    if (view.width !== w || view.height !== h) { view.width = w; view.height = h; geo.reset(); geom = null; }
     vctx.drawImage(video, 0, 0, w, h);
     var img = vctx.getImageData(0, 0, w, h);
-    var prof = Core.extractProfile(img, { axis: S.axis, roiCenter: S.roiC / 100, roiWidth: S.roiW / 100 });
-    var res = counter.process(prof);
+    if (S.autoTape) { if (gN++ % 3 === 0 || !geom) geom = geo.update(img, S.axis); }
+    else geom = null;
+    var opt = { axis: S.axis, margin: S.margin / 100, autoTape: S.autoTape, tapeFrac: 0.6, roiCenter: S.roiC / 100, roiWidth: S.roiW / 100 };
+    var prof = Core.extractProfile(img, geom, opt);
+    var res = counter.step(prof, t - t0);
     lastRes = res;
     onCount(res.count);
-    drawOverlay(w, h, res); drawGraph(res, prof.length);
+    var msg = res.msg, cls = res.status === 'ok' ? '' : 'warn';
+    if (S.autoTape && geom && !geom.ok) { msg = Core.MSG.noRegion + ' (nutze ganzes Bild)'; cls = 'warn'; }
+    else if (S.autoTape && geom && geom.ok && !geom.tapeOk && res.status === 'ok') { msg = Core.MSG.noTape + ' (nutze manuellen Streifen)'; cls = 'warn'; }
+    if (res.status === 'lowContrast' || res.status === 'noRegion') cls = 'bad';
+    setDiag(msg, cls);
+    drawOverlay(w, h, res, opt); drawGraph(res);
+    if (rec) rec.push([Date.now(), 'frame', res.count, (t - t0).toFixed(3), res.status, (res.pitch || 0).toFixed(1), (res.pitchConf || 0).toFixed(2), (res.conf || 0).toFixed(2), (res.snapCC || 0).toFixed(2), (res.shiftPx || 0).toFixed(2), (res.U || 0).toFixed(3), res.dir, res.dirLocked ? 1 : 0, res.mode || '', res.chan || '', fps.toFixed(1)]);
     frames++;
-    var t = performance.now();
-    if (t - fpsT > 1000) {
-      fps = frames * 1000 / (t - fpsT); frames = 0; fpsT = t;
+    var tn = performance.now();
+    if (tn - fpsT > 500) {
+      fps = frames * 1000 / (tn - fpsT); frames = 0; fpsT = tn;
       $('fpsShow').textContent = fps.toFixed(0) + ' fps' + (fps < 20 ? ' (langsam ziehen!)' : '');
-      $('pitchShow').textContent = res.pitch ? ('Raster: ' + res.pitch.toFixed(0) + ' px' + (counter.virtualUnverified ? ', ergänzt: ' + counter.virtualUnverified : '')) : 'Raster: lernt…';
+      $('pitchShow').textContent = res.pitch ? ('Raster: ' + res.pitch.toFixed(0) + ' px · Sicherheit ' + Math.round((res.pitchConf || 0) * 100) + '%' + (S.manPitch > 0 ? ' (manuell)' : '')) : 'Raster: lernt…';
+      var dv = S.axis === 'v' ? (res.dir > 0 ? '▼' : '▲') : (res.dir > 0 ? '▶' : '◀');
+      $('dirShow').textContent = res.dir ? ('Richtung: ' + dv + (S.dirMode === 'auto' ? (res.dirLocked ? ' (gelernt)' : '') : ' (fest)')) : 'Richtung: wird erkannt';
+      $('modeShow').textContent = res.mode ? ('Modus: ' + res.mode + (S.mode === 'auto' ? ' (auto)' : '')) : '';
     }
   }
 
-  function drawOverlay(w, h, res) {
+  function drawOverlay(w, h, res, opt) {
     var vert = S.axis === 'v', L = vert ? h : w, A = vert ? w : h;
-    var a0 = (S.roiC - S.roiW / 2) / 100 * A, a1 = (S.roiC + S.roiW / 2) / 100 * A, cu = S.cut / 100 * L;
+    function seg(l0, a0, l1, a1) { vctx.beginPath(); if (vert) { vctx.moveTo(a0, l0); vctx.lineTo(a1, l1); } else { vctx.moveTo(l0, a0); vctx.lineTo(l1, a1); } vctx.stroke(); }
     vctx.lineWidth = 2;
+    var i0 = res.i0, i1 = res.i1;
+    // bright region (yellow) incl. margin
+    if (geom && geom.ok) {
+      vctx.strokeStyle = 'rgba(255,220,0,0.9)'; vctx.setLineDash([6, 4]);
+      seg(geom.l0, geom.a0, geom.l0, geom.a1); seg(geom.l1, geom.a0, geom.l1, geom.a1); seg(geom.l0, geom.a0, geom.l1, geom.a0); seg(geom.l0, geom.a1, geom.l1, geom.a1);
+      vctx.setLineDash([]); seg(i0, geom.a0, i0, geom.a1); seg(i1, geom.a0, i1, geom.a1);
+    }
+    // measurement strip (blue)
     vctx.strokeStyle = '#3fa9ff';
-    if (vert) vctx.strokeRect(a0, 0, a1 - a0, h); else vctx.strokeRect(0, a0, w, a1 - a0);
-    res.seps.forEach(function (s) {
-      if (!s.confirmed) return;
-      vctx.strokeStyle = s.virtual ? '#ff00ff' : '#2ecc71';
-      vctx.beginPath();
-      if (vert) { vctx.moveTo(a0, s.u); vctx.lineTo(a1, s.u); } else { vctx.moveTo(s.u, a0); vctx.lineTo(s.u, a1); }
-      vctx.stroke();
-    });
-    vctx.strokeStyle = '#ff3b30'; vctx.lineWidth = 3;
-    vctx.beginPath();
-    if (vert) { vctx.moveTo(0, cu); vctx.lineTo(w, cu); } else { vctx.moveTo(cu, 0); vctx.lineTo(cu, h); }
-    vctx.stroke();
-    // direction arrow
-    var d = S.reverse ? -1 : 1; vctx.fillStyle = '#ff3b30'; vctx.font = 'bold 18px sans-serif';
-    var arrow = vert ? (d > 0 ? '▼ Zug' : '▲ Zug') : (d > 0 ? 'Zug ▶' : '◀ Zug');
+    var useTape = S.autoTape && geom && geom.ok && geom.tapeOk;
+    var cA = function (l) { return useTape ? geom.tc + geom.ts * l : S.roiC / 100 * A; };
+    var hw = useTape ? geom.tw * 0.3 : S.roiW / 200 * A;
+    seg(i0, cA(i0) - hw, i1, cA(i1) - hw); seg(i0, cA(i0) + hw, i1, cA(i1) + hw);
+    // label boundaries (green)
+    vctx.strokeStyle = '#2ecc71';
+    (res.bounds || []).forEach(function (b) { seg(b, cA(b) - hw - 6, b, cA(b) + hw + 6); });
+    // cut line + direction arrow (red)
+    var cu = S.cut / 100 * L;
+    vctx.strokeStyle = '#ff3b30'; vctx.lineWidth = 3; seg(cu, 0, cu, A);
+    var d = res.dir || 0; vctx.fillStyle = '#ff3b30'; vctx.font = 'bold 18px sans-serif';
+    var arrow = !d ? '? Zug' : vert ? (d > 0 ? '▼ Zug' : '▲ Zug') : (d > 0 ? 'Zug ▶' : '◀ Zug');
     if (vert) vctx.fillText(arrow, 6, Math.max(18, cu - 6)); else vctx.fillText(arrow, Math.min(w - 70, cu + 6), 20);
   }
 
-  function drawGraph(res, L) {
-    var W = graph.width, H = graph.height, sm = res.sm, m = res.mean;
+  function drawGraph(res) {
+    var W = graph.width, H = graph.height, hp = res.hp;
     gctx.fillStyle = '#0b0b0b'; gctx.fillRect(0, 0, W, H);
-    var lo = 255, hi = 0, i;
-    for (i = 0; i < L; i++) { if (sm[i] < lo) lo = sm[i]; if (sm[i] > hi) hi = sm[i]; }
-    if (hi - lo < 10) hi = lo + 10;
-    var X = function (i) { return i / (L - 1) * W; }, Y = function (v) { return H - 6 - (v - lo) / (hi - lo) * (H - 12); };
-    function line(arr, col, add) {
-      gctx.strokeStyle = col; gctx.beginPath();
-      for (var j = 0; j < L; j++) { var yy = Y(arr[j] + (add || 0)); if (j) gctx.lineTo(X(j), yy); else gctx.moveTo(X(j), yy); }
-      gctx.stroke();
-    }
-    gctx.lineWidth = 1; line(m, '#555'); line(m, '#ff9500', res.thr);
-    gctx.lineWidth = 2; line(sm, '#fff');
-    res.seps.forEach(function (s) {
-      if (!s.confirmed) return;
-      gctx.strokeStyle = s.virtual ? '#ff00ff' : '#2ecc71'; gctx.beginPath(); gctx.moveTo(X(s.u), 0); gctx.lineTo(X(s.u), 14); gctx.stroke();
-    });
-    gctx.fillStyle = '#ff3b30';
-    res.peaks.forEach(function (p) { gctx.beginPath(); gctx.arc(X(p), Y(sm[Math.round(p)]), 5, 0, 7); gctx.fill(); });
-    gctx.strokeStyle = '#ff3b30'; gctx.lineWidth = 2; var cx = X(S.cut / 100 * (L - 1));
-    gctx.beginPath(); gctx.moveTo(cx, 0); gctx.lineTo(cx, H); gctx.stroke();
+    if (!hp || !hp.length) { gctx.fillStyle = '#aaa'; gctx.font = '20px sans-serif'; gctx.fillText(res.msg || '', 8, 22); return; }
+    var n = hp.length, X = function (i) { return i / (n - 1) * W; }, Y = function (v) { return H / 2 - v / 3.5 * (H / 2 - 6); };
+    gctx.strokeStyle = '#333'; gctx.lineWidth = 1; gctx.beginPath(); gctx.moveTo(0, H / 2); gctx.lineTo(W, H / 2); gctx.stroke();
+    gctx.strokeStyle = '#fff'; gctx.lineWidth = 2; gctx.beginPath();
+    for (var j = 0; j < n; j++) { var yy = Y(Math.max(-3.5, Math.min(3.5, hp[j]))); if (j) gctx.lineTo(X(j), yy); else gctx.moveTo(X(j), yy); }
+    gctx.stroke();
+    gctx.strokeStyle = '#2ecc71';
+    (res.bounds || []).forEach(function (b) { var x = X(b - res.i0); gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, 16); gctx.stroke(); });
+    var L = (S.axis === 'v' ? view.height : view.width), cx = X(S.cut / 100 * L - res.i0);
+    gctx.strokeStyle = '#ff3b30'; gctx.lineWidth = 2; gctx.beginPath(); gctx.moveTo(cx, 0); gctx.lineTo(cx, H); gctx.stroke();
     gctx.fillStyle = '#aaa'; gctx.font = '20px sans-serif';
-    gctx.fillText('Bewegung ' + res.shift.toFixed(1) + ' px/Frame · Korr ' + res.conf.toFixed(2), 8, 22);
+    gctx.fillText('Bewegung ' + (res.shiftPx || 0).toFixed(1) + ' px/Bild · Korr ' + (res.conf || 0).toFixed(2) + ' · Kanal ' + (res.chan || '-') + ' · ' + (res.mode || ''), 8, 22);
   }
 
   applyUI();
